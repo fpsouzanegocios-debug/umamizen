@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="192" height="192">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="100%" stop-color="#0B0F19"/>
+    </linearGradient>
+    <linearGradient id="salmonGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FB7185"/>
+      <stop offset="100%" stop-color="#E11D48"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE047"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+  
+  <rect width="512" height="512" rx="110" fill="url(#bgGrad)"/>
+  <rect width="504" height="504" x="4" y="4" rx="106" fill="none" stroke="#F43F5E" stroke-width="6" opacity="0.3"/>
+  <ellipse cx="256" cy="330" rx="170" ry="60" fill="#1C2638" opacity="0.8"/>
+  <path d="M120 280 C 120 220, 392 220, 392 280 C 392 340, 120 340, 120 280 Z" fill="#F8FAFC"/>
+  <path d="M100 250 C 100 170, 412 170, 412 250 C 412 290, 100 290, 100 250 Z" fill="url(#salmonGrad)"/>
+  <path d="M160 210 Q 230 250 300 220" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" fill="none" opacity="0.7"/>
+  <path d="M210 215 Q 280 255 350 225" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" fill="none" opacity="0.7"/>
+  <path d="M260 225 Q 330 265 390 235" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.7"/>
+  <rect x="226" y="195" width="60" height="115" rx="8" fill="#0F172A"/>
+  <path d="M256 120 L270 150 L305 150 L277 170 L288 200 L256 180 L224 200 L235 170 L207 150 L242 150 Z" fill="url(#goldGrad)" opacity="0.9"/>
+</svg>
