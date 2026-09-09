@@ -33,3 +33,4 @@ dist-ssr
 .agents/
 *.xlsx
 *.csv
+*.bat
