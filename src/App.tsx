@@ -24,6 +24,7 @@ import { getDefaultDateRange } from './lib/dateUtils';
 import { Sidebar, TabType } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { DashboardView } from './components/dashboard/DashboardView';
+import { PerformanceView } from './components/performance/PerformanceView';
 import { OrdersView } from './components/orders/OrdersView';
 import { CouriersView } from './components/couriers/CouriersView';
 import { PayablesView } from './components/payables/PayablesView';
@@ -66,6 +67,7 @@ export const App: React.FC = () => {
   // Per-category independent date filters (ensuring no global cross-category overwrite)
   const [categoryDateRanges, setCategoryDateRanges] = useState<Record<DateFilterCategory, DateRange>>({
     dashboard: getDefaultDateRange(),
+    performance: getDefaultDateRange(),
     orders: getDefaultDateRange(),
     couriers: getDefaultDateRange(),
     payables: getDefaultDateRange(),
@@ -298,6 +300,24 @@ export const App: React.FC = () => {
               onOpenNewCash={() => { setActiveTab('cash'); setIsNewCashModalOpen(true); }}
               onOpenNewPayable={() => { setActiveTab('payables'); setIsNewPayableModalOpen(true); }}
               onOpenNewInvestment={() => { setActiveTab('investments'); setIsNewInvestmentModalOpen(true); }}
+            />
+          )}
+
+          {activeTab === 'performance' && (
+            <PerformanceView
+              orders={orders}
+              deliveries={deliveries}
+              payables={payables}
+              fixedCosts={fixedCosts}
+              shifts={shifts}
+              investments={investments}
+              cashTransactions={cashTransactions}
+              settings={settings}
+              selectedMonth={categoryDateRanges.performance.startDate.getMonth() + 1}
+              selectedYear={categoryDateRanges.performance.startDate.getFullYear()}
+              dateRange={categoryDateRanges.performance}
+              onDateRangeChange={(range) => handleCategoryDateRangeChange('performance', range)}
+              onRefresh={fetchAllData}
             />
           )}
 

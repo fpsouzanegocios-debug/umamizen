@@ -138,7 +138,12 @@ export const DeliveryCreateModal: React.FC<DeliveryCreateModalProps> = ({
         order_number: orderNumber.trim() || 'RETORNO',
         courier_id: matchedCourier ? matchedCourier.id : null,
         courier_name: courierName.trim(),
-        delivery_date: new Date(deliveryDate).toISOString(),
+        delivery_date: (() => {
+          if (!deliveryDate) return new Date().toISOString();
+          const [y, m, d] = deliveryDate.split('-').map(Number);
+          const now = new Date();
+          return new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds()).toISOString();
+        })(),
         order_amount: Number(orderAmount) || 0,
         payment_method: paymentMethod,
         neighborhood_name: matchedRate ? matchedRate.name : neighborhoodName.trim().toUpperCase(),

@@ -52,28 +52,64 @@ export function parseMoney(val: any): number {
 
 export function parseExcelDate(val: any): string {
   if (!val) return new Date().toISOString();
+
+  // If already a JS Date
   if (val instanceof Date && !isNaN(val.getTime())) {
-    return val.toISOString();
+    const y = val.getUTCFullYear();
+    const m = val.getUTCMonth();
+    const d = val.getUTCDate();
+    const h = val.getUTCHours();
+    const min = val.getUTCMinutes();
+    const s = val.getUTCSeconds();
+    return new Date(y, m, d, h, min, s).toISOString();
   }
+
+  // If Excel serial number (e.g. 46271.77605556784)
   if (typeof val === 'number') {
-    // Excel serial date to JS Date
     const ms = Math.round((val - 25569) * 86400 * 1000);
-    const d = new Date(ms);
-    return !isNaN(d.getTime()) ? d.toISOString() : new Date().toISOString();
+    const tempDate = new Date(ms);
+    if (!isNaN(tempDate.getTime())) {
+      const y = tempDate.getUTCFullYear();
+      const m = tempDate.getUTCMonth();
+      const d = tempDate.getUTCDate();
+      const h = tempDate.getUTCHours();
+      const min = tempDate.getUTCMinutes();
+      const s = tempDate.getUTCSeconds();
+      return new Date(y, m, d, h, min, s).toISOString();
+    }
+    return new Date().toISOString();
   }
+
   if (typeof val === 'string') {
     const str = val.trim();
     if (!str) return new Date().toISOString();
+
     // Check Brazilian date DD/MM/YYYY or DD/MM/YYYY HH:mm:ss
     const brMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
     if (brMatch) {
-      const [_, d, m, y, h = '12', min = '0', s = '0'] = brMatch;
-      const dt = new Date(Number(y), Number(m) - 1, Number(d), Number(h), Number(min), Number(s));
+      const [_, d, m, y, h, min, s] = brMatch;
+      const hour = h !== undefined ? Number(h) : 12;
+      const minute = min !== undefined ? Number(min) : 0;
+      const second = s !== undefined ? Number(s) : 0;
+      const dt = new Date(Number(y), Number(m) - 1, Number(d), hour, minute, second);
       if (!isNaN(dt.getTime())) return dt.toISOString();
     }
+
+    // Check ISO date YYYY-MM-DD or YYYY-MM-DD HH:mm:ss or YYYY-MM-DDTHH:mm:ss
+    const isoMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s]+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+    if (isoMatch) {
+      const [_, y, m, d, h, min, s] = isoMatch;
+      const hour = h !== undefined ? Number(h) : 12;
+      const minute = min !== undefined ? Number(min) : 0;
+      const second = s !== undefined ? Number(s) : 0;
+      const dt = new Date(Number(y), Number(m) - 1, Number(d), hour, minute, second);
+      if (!isNaN(dt.getTime())) return dt.toISOString();
+    }
+
     const parsed = new Date(str);
     if (!isNaN(parsed.getTime())) return parsed.toISOString();
   }
+
   return new Date().toISOString();
 }
 

@@ -127,7 +127,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
     // Today's gross
     const todayStr = getLocalDateKey();
-    const todayOrders = completedOrders.filter((o) => o.order_date.startsWith(todayStr));
+    const todayOrders = completedOrders.filter((o) => getLocalDateKey(new Date(o.order_date)) === todayStr);
     const grossToday = todayOrders.reduce((acc, o) => acc + Number(o.gross_amount || 0), 0);
 
     return { count, gross, platformFees, cardFees, adjustments, net, avgTicket, grossToday };

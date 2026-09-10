@@ -20,11 +20,30 @@ import {
 interface DateRangePickerProps {
   value: DateRange;
   onChange: (range: DateRange) => void;
+  align?: 'left' | 'right' | 'auto';
 }
 
-export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChange }) => {
+export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChange, align = 'auto' }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [computedAlign, setComputedAlign] = useState<'left' | 'right'>(align === 'right' ? 'right' : 'left');
+
+  useEffect(() => {
+    if (isOpen) {
+      if (align === 'right') {
+        setComputedAlign('right');
+      } else if (align === 'left') {
+        setComputedAlign('left');
+      } else if (containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        if (rect.left + 740 > window.innerWidth) {
+          setComputedAlign('right');
+        } else {
+          setComputedAlign('left');
+        }
+      }
+    }
+  }, [isOpen, align]);
 
   // Presets always computed from the real current clock time
   const presets = useMemo(() => getPresetOptions(new Date()), []);
@@ -264,7 +283,8 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChang
           style={{
             position: 'absolute',
             top: 'calc(100% + 8px)',
-            left: 0,
+            left: computedAlign === 'left' ? 0 : 'auto',
+            right: computedAlign === 'right' ? 0 : 'auto',
             zIndex: 1000,
             backgroundColor: '#0F172A',
             border: '1px solid #334155',

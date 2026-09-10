@@ -187,6 +187,8 @@ export interface AccountsPayable {
   total_installments: number;
   group_id?: string;
   amount: number;
+  original_amount?: number;
+  interest_amount?: number;
   status: 'pending' | 'paid' | 'due_today' | 'overdue';
   is_paid: boolean;
   payment_date?: string;
@@ -335,6 +337,7 @@ export interface FixedCost {
 
 export type DateFilterCategory = 
   | 'dashboard' 
+  | 'performance'
   | 'orders' 
   | 'couriers' 
   | 'payables' 

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   TrendingUp, 
   Plus, 
@@ -11,7 +11,8 @@ import {
   Layers,
   X,
   Edit3,
-  Check
+  Check,
+  AlertTriangle
 } from 'lucide-react';
 import { Investment, DateRange } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/formatters';
@@ -52,6 +53,14 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
   isCreateModalOpen = false,
   onCloseCreateModal
 }) => {
+  const [localInvestments, setLocalInvestments] = useState<Investment[]>(investments);
+  useEffect(() => {
+    setLocalInvestments(investments);
+  }, [investments]);
+
+  const [deletingInvestment, setDeletingInvestment] = useState<Investment | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+
   const [showModal, setShowModal] = useState<boolean>(isCreateModalOpen);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
@@ -70,12 +79,14 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
 
   // Filter investments
   const filteredInvestments = useMemo(() => {
-    return investments.filter((inv) => {
+    return localInvestments.filter((inv) => {
       if (dateRange) {
         if (!isDateInRange(inv.investment_date, dateRange)) return false;
       } else {
-        const dt = new Date(inv.investment_date + 'T00:00:00');
-        if (dt.getMonth() + 1 !== selectedMonth || dt.getFullYear() !== selectedYear) {
+        const [yStr, mStr] = (inv.investment_date || '').split('-');
+        const y = parseInt(yStr, 10);
+        const m = parseInt(mStr, 10);
+        if (m !== selectedMonth || y !== selectedYear) {
           return false;
         }
       }
@@ -84,29 +95,31 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
       }
       return true;
     });
-  }, [investments, dateRange, selectedMonth, selectedYear, selectedCategory]);
+  }, [localInvestments, dateRange, selectedMonth, selectedYear, selectedCategory]);
 
   // Totals (Month, Year, Paid, Pending)
   const stats = useMemo(() => {
-    const monthTotal = filteredInvestments.reduce((acc, i) => acc + Number(i.amount), 0);
-    const paidTotal = filteredInvestments.filter((i) => i.status === 'paid').reduce((acc, i) => acc + Number(i.amount), 0);
-    const pendingTotal = filteredInvestments.filter((i) => i.status === 'pending').reduce((acc, i) => acc + Number(i.amount), 0);
+    const monthTotal = filteredInvestments.reduce((acc, i) => acc + Number(i.amount || 0), 0);
+    const paidTotal = filteredInvestments.filter((i) => i.status === 'paid').reduce((acc, i) => acc + Number(i.amount || 0), 0);
+    const pendingTotal = filteredInvestments.filter((i) => i.status === 'pending').reduce((acc, i) => acc + Number(i.amount || 0), 0);
 
-    // Year total
-    const yearInvestments = investments.filter((inv) => {
-      const dt = new Date(inv.investment_date + 'T00:00:00');
-      return dt.getFullYear() === selectedYear;
+    // Year total: accurately filters by year (and selectedCategory if active)
+    const yearInvestments = localInvestments.filter((inv) => {
+      const year = parseInt((inv.investment_date || '').slice(0, 4), 10);
+      if (year !== selectedYear) return false;
+      if (selectedCategory !== 'all' && inv.category !== selectedCategory) return false;
+      return true;
     });
-    const yearTotal = yearInvestments.reduce((acc, i) => acc + Number(i.amount), 0);
+    const yearTotal = yearInvestments.reduce((acc, i) => acc + Number(i.amount || 0), 0);
 
     // Group by category
     const byCat = new Map<string, number>();
     filteredInvestments.forEach((i) => {
-      byCat.set(i.category, (byCat.get(i.category) || 0) + Number(i.amount));
+      byCat.set(i.category, (byCat.get(i.category) || 0) + Number(i.amount || 0));
     });
 
     return { monthTotal, yearTotal, paidTotal, pendingTotal, byCat };
-  }, [filteredInvestments, investments, selectedYear]);
+  }, [filteredInvestments, localInvestments, selectedYear, selectedCategory]);
 
   const handleCreateInvestment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -246,14 +259,38 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Deseja excluir este registro de investimento?')) return;
+  const handleConfirmDelete = async (inv: Investment, deleteAllInstallments: boolean) => {
+    setIsDeleting(true);
     try {
-      const { error } = await supabase.from('investments').delete().eq('id', id);
-      if (error) throw error;
+      // 1. Optimistic local update to discount amount immediately
+      if (deleteAllInstallments && inv.group_id) {
+        setLocalInvestments((prev) => prev.filter((i) => i.group_id !== inv.group_id));
+      } else {
+        setLocalInvestments((prev) => prev.filter((i) => i.id !== inv.id));
+      }
+
+      // 2. Delete from Supabase
+      if (deleteAllInstallments && inv.group_id) {
+        const { error } = await supabase.from('investments').delete().eq('group_id', inv.group_id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('investments').delete().eq('id', inv.id);
+        if (error) throw error;
+      }
+
+      // 3. Delete linked cash transaction if exists
+      if (inv.linked_cash_id) {
+        await supabase.from('cash_transactions').delete().eq('id', inv.linked_cash_id);
+      }
+
+      setDeletingInvestment(null);
       onRefresh();
     } catch (err: any) {
-      alert('Erro ao excluir: ' + err.message);
+      console.error('Erro ao excluir investimento:', err);
+      alert('Erro ao excluir: ' + (err.message || String(err)));
+      onRefresh();
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -272,6 +309,18 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <select
+            className="select"
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+            style={{ minWidth: '170px' }}
+          >
+            <option value="all">Todas as Categorias</option>
+            {categories.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+
           {dateRange && onDateRangeChange && (
             <DateRangePicker value={dateRange} onChange={onDateRangeChange} />
           )}
@@ -291,9 +340,16 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
         </div>
 
         <div className="kpi-card">
-          <div className="kpi-title">Total no Ano {selectedYear}</div>
+          <div className="kpi-title">
+            Total no Ano {selectedYear}
+            {selectedCategory !== 'all' && (
+              <span style={{ fontSize: '0.75rem', fontWeight: 'normal', color: '#94A3B8' }}> ({selectedCategory})</span>
+            )}
+          </div>
           <div className="kpi-value" style={{ color: '#38BDF8' }}>{formatCurrency(stats.yearTotal)}</div>
-          <div className="kpi-subtitle">Acumulado do ano</div>
+          <div className="kpi-subtitle">
+            {selectedCategory !== 'all' ? `Acumulado de ${selectedCategory}` : 'Acumulado de todos os investimentos'}
+          </div>
         </div>
 
         <div className="kpi-card">
@@ -404,10 +460,10 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
                         <Edit3 size={13} />
                       </button>
                       <button
-                        onClick={() => handleDelete(inv.id)}
+                        onClick={() => setDeletingInvestment(inv)}
                         className="btn btn-secondary btn-sm"
                         style={{ padding: '4px 8px', color: '#FB7185' }}
-                        title="Excluir"
+                        title="Excluir Investimento"
                       >
                         <Trash2 size={13} />
                       </button>
@@ -685,6 +741,130 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingInvestment && (() => {
+        const hasInstallments = Boolean(
+          (deletingInvestment.total_installments && deletingInvestment.total_installments > 1) ||
+          deletingInvestment.group_id
+        );
+        const groupItems = hasInstallments && deletingInvestment.group_id
+          ? localInvestments.filter((i) => i.group_id === deletingInvestment.group_id)
+          : [deletingInvestment];
+        const groupTotal = groupItems.reduce((acc, i) => acc + Number(i.amount || 0), 0);
+
+        return (
+          <div className="modal-overlay">
+            <div className="modal-content" style={{ maxWidth: '490px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#FB7185' }}>
+                  <AlertTriangle size={22} />
+                  <h3 style={{ fontSize: '1.2rem', color: '#F8FAFC', margin: 0 }}>Confirmar Exclusão</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDeletingInvestment(null)}
+                  style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div style={{ backgroundColor: 'var(--bg-input)', padding: '14px 16px', borderRadius: '8px', marginBottom: '16px', border: '1px solid var(--border-color)' }}>
+                <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: '1.05rem', marginBottom: '4px' }}>
+                  {deletingInvestment.description}
+                </div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'flex', flexWrap: 'wrap', gap: '12px', marginTop: '6px' }}>
+                  <span>Categoria: <strong style={{ color: '#F1F5F9' }}>{deletingInvestment.category}</strong></span>
+                  {deletingInvestment.supplier && (
+                    <span>Fornecedor: <strong style={{ color: '#F1F5F9' }}>{deletingInvestment.supplier}</strong></span>
+                  )}
+                  <span>Valor desta parcela: <strong style={{ color: '#34D399' }}>{formatCurrency(deletingInvestment.amount)}</strong></span>
+                  {hasInstallments && (
+                    <span>Parcela: <strong style={{ color: '#FBBF24' }}>{deletingInvestment.installment_number}/{deletingInvestment.total_installments}</strong></span>
+                  )}
+                </div>
+              </div>
+
+              {hasInstallments && groupItems.length > 1 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{
+                    backgroundColor: 'rgba(244, 63, 94, 0.08)',
+                    border: '1px solid rgba(244, 63, 94, 0.3)',
+                    borderRadius: '8px',
+                    padding: '12px 14px',
+                    fontSize: '0.85rem',
+                    color: '#F8FAFC',
+                    marginBottom: '4px'
+                  }}>
+                    Este investimento possui <strong>{groupItems.length} parcelas</strong> cadastradas somando <strong>{formatCurrency(groupTotal)}</strong>.
+                    <br />
+                    Ao excluir, o valor será descontado imediatamente do total do ano {selectedYear}. Como deseja proceder?
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={isDeleting}
+                    onClick={() => handleConfirmDelete(deletingInvestment, true)}
+                    style={{ backgroundColor: '#E11D48', borderColor: '#E11D48', width: '100%', justifyContent: 'center', padding: '10px 14px', fontWeight: 700 }}
+                  >
+                    <Trash2 size={16} />
+                    <span>Excluir TODAS as {groupItems.length} parcelas (Descontar {formatCurrency(groupTotal)})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={isDeleting}
+                    onClick={() => handleConfirmDelete(deletingInvestment, false)}
+                    style={{ width: '100%', justifyContent: 'center', padding: '10px 14px' }}
+                  >
+                    <span>Excluir Apenas Esta Parcela ({deletingInvestment.installment_number}/{deletingInvestment.total_installments} - Descontar {formatCurrency(deletingInvestment.amount)})</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={isDeleting}
+                    onClick={() => setDeletingInvestment(null)}
+                    style={{ width: '100%', justifyContent: 'center', marginTop: '2px' }}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                    Tem certeza de que deseja excluir este investimento? O valor de <strong>{formatCurrency(deletingInvestment.amount)}</strong> será descontado do total do ano {selectedYear} imediatamente.
+                  </p>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={isDeleting}
+                      onClick={() => setDeletingInvestment(null)}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={isDeleting}
+                      onClick={() => handleConfirmDelete(deletingInvestment, false)}
+                      style={{ backgroundColor: '#E11D48', borderColor: '#E11D48' }}
+                    >
+                      <Trash2 size={16} />
+                      <span>{isDeleting ? 'Excluindo...' : `Excluir e Descontar ${formatCurrency(deletingInvestment.amount)}`}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

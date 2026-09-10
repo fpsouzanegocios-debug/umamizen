@@ -18,7 +18,8 @@ import {
   Target,
   TrendingUp,
   Percent,
-  ShoppingBag
+  ShoppingBag,
+  AlertTriangle
 } from 'lucide-react';
 import { AccountsPayable, SystemSettings, DateRange, MonthlyGoal } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/formatters';
@@ -128,6 +129,9 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   // --- PAYMENT / BAIXA STATES ---
   const [payDate, setPayDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [payAmount, setPayAmount] = useState<number>(0);
+  const [payOriginalAmount, setPayOriginalAmount] = useState<number>(0);
+  const [payInterestAmount, setPayInterestAmount] = useState<number>(0);
+  const [payNotes, setPayNotes] = useState<string>('');
   const [payMethod, setPayMethod] = useState<string>('Boleto');
 
   // --- BUDGET / GOAL (35% DA META) STATES ---
@@ -218,6 +222,9 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
     const dueSoon = computedPayables.filter((p) => p.calculatedStatus === 'due_soon');
     const paid = computedPayables.filter((p) => p.is_paid);
 
+    const withInterest = paid.filter((p) => Number(p.interest_amount) > 0);
+    const interestTotal = withInterest.reduce((acc, p) => acc + Number(p.interest_amount || 0), 0);
+
     const overdueTotal = overdue.reduce((acc, p) => acc + Number(p.amount), 0);
     const dueTodayTotal = dueToday.reduce((acc, p) => acc + Number(p.amount), 0);
     const dueSoonTotal = dueSoon.reduce((acc, p) => acc + Number(p.amount), 0);
@@ -230,7 +237,9 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
       dueTodayTotal,
       dueSoonCount: dueSoon.length,
       dueSoonTotal,
-      paidTotal
+      paidTotal,
+      interestTotal,
+      interestCount: withInterest.length
     };
   }, [computedPayables]);
 
@@ -245,6 +254,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
       if (statusFilter === 'due_soon' && p.calculatedStatus !== 'due_soon') return false;
       if (statusFilter === 'paid' && !p.is_paid) return false;
       if (statusFilter === 'unpaid' && p.is_paid) return false;
+      if (statusFilter === 'with_interest' && (!p.is_paid || !Number(p.interest_amount) || Number(p.interest_amount) <= 0)) return false;
 
       if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
 
@@ -371,10 +381,15 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   };
 
   const handleOpenPay = (p: AccountsPayable) => {
+    const orig = (p.original_amount !== undefined && p.original_amount !== null) ? Number(p.original_amount) : Number(p.amount) || 0;
+    const existingInterest = Number(p.interest_amount) || 0;
     setPayingPayable(p);
     setPayDate(new Date().toISOString().split('T')[0]);
-    setPayAmount(Number(p.amount) || 0);
+    setPayOriginalAmount(orig);
+    setPayAmount(orig + existingInterest);
+    setPayInterestAmount(existingInterest);
     setPayMethod(p.payment_method || 'Boleto');
+    setPayNotes(p.notes || '');
   };
 
   const handleConfirmPay = async (e: React.FormEvent) => {
@@ -383,14 +398,33 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
 
     setIsSaving(true);
     try {
+      const finalPaid = Number(payAmount) || 0;
+      const finalOrig = Number(payOriginalAmount) || 0;
+      let finalInterest = 0;
+      if (finalPaid > finalOrig) {
+        finalInterest = Math.round((finalPaid - finalOrig) * 100) / 100;
+      } else if (payInterestAmount > 0) {
+        finalInterest = Number(payInterestAmount);
+      }
+
+      let updatedNotes = payNotes.trim();
+      if (finalInterest > 0 && !updatedNotes.toLowerCase().includes('juros')) {
+        updatedNotes = updatedNotes 
+          ? `${updatedNotes} | Juros de boleto: ${formatCurrency(finalInterest)}` 
+          : `Juros de boleto: ${formatCurrency(finalInterest)}`;
+      }
+
       const { error } = await supabase
         .from('accounts_payable')
         .update({
           is_paid: true,
           status: 'paid',
           payment_date: payDate,
-          amount: Number(payAmount),
+          original_amount: finalOrig,
+          interest_amount: finalInterest,
+          amount: finalPaid,
           payment_method: payMethod,
+          notes: updatedNotes || null,
           linked_cash_id: null
         })
         .eq('id', payingPayable.id);
@@ -409,12 +443,15 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
     if (!confirm(`Deseja desmarcar o pagamento da conta "${p.description}" e reabri-la como pendente?`)) return;
     setIsSaving(true);
     try {
+      const origAmount = (p.original_amount !== undefined && p.original_amount !== null) ? Number(p.original_amount) : Number(p.amount);
       const { error } = await supabase
         .from('accounts_payable')
         .update({
           is_paid: false,
           status: 'pending',
-          payment_date: null
+          payment_date: null,
+          amount: origAmount,
+          interest_amount: 0
         })
         .eq('id', p.id);
       if (error) throw error;
@@ -483,6 +520,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             total_installments: numInstallments,
             group_id: groupId,
             amount: Number(item.amount),
+            original_amount: Number(item.amount),
+            interest_amount: 0,
             status: 'pending',
             is_paid: false,
             payment_method: paymentMethod,
@@ -515,6 +554,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             total_installments: numInstallments,
             group_id: groupId,
             amount: installmentAmount,
+            original_amount: installmentAmount,
+            interest_amount: 0,
             status: 'pending',
             is_paid: false,
             payment_method: paymentMethod,
@@ -788,10 +829,33 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             Liquidado no período
           </div>
         </div>
+
+        <div 
+          className="kpi-card"
+          onClick={() => setStatusFilter(statusFilter === 'with_interest' ? 'all' : 'with_interest')}
+          style={{ 
+            cursor: 'pointer',
+            borderColor: statusFilter === 'with_interest' ? '#FB7185' : stats.interestCount > 0 ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-color)',
+            backgroundColor: statusFilter === 'with_interest' ? 'rgba(239, 68, 68, 0.1)' : undefined,
+            transition: 'all 0.2s ease'
+          }}
+          title="Clique para filtrar apenas boletos pagos com acréscimo de juros"
+        >
+          <div className="kpi-title" style={{ color: stats.interestCount > 0 ? '#FB7185' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>Juros de Boleto</span>
+            <AlertTriangle size={14} color={stats.interestCount > 0 ? '#FB7185' : 'var(--text-muted)'} />
+          </div>
+          <div className="kpi-value" style={{ color: stats.interestCount > 0 ? '#FB7185' : '#F8FAFC' }}>
+            {formatCurrency(stats.interestTotal)}
+          </div>
+          <div className="kpi-subtitle" style={{ color: stats.interestCount > 0 ? '#FB7185' : 'var(--text-muted)' }}>
+            {stats.interestCount} {stats.interestCount === 1 ? 'boleto com juros' : 'boletos com juros'} {statusFilter === 'with_interest' ? '(ativo)' : ''}
+          </div>
+        </div>
       </div>
 
       {/* Filters Bar */}
-      <div className="card" style={{ padding: '14px', marginBottom: '20px' }}>
+      <div className="card" style={{ padding: '14px', marginBottom: '16px' }}>
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
           <select
             className="select"
@@ -807,7 +871,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             className="select"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            style={{ width: '200px' }}
+            style={{ width: '220px' }}
           >
             <option value="all">Todos os Status</option>
             <option value="overdue">⚠️ Vencidas</option>
@@ -815,6 +879,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             <option value="due_soon">⏰ Vencem nos próximos dias</option>
             <option value="unpaid">Em Aberto (não pagas)</option>
             <option value="paid">✅ Pagas</option>
+            <option value="with_interest">🚨 Com Juros de Boleto ({stats.interestCount})</option>
           </select>
 
           <select
@@ -830,6 +895,40 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
           </select>
         </div>
       </div>
+
+      {/* Active Filter Banner when with_interest is selected */}
+      {statusFilter === 'with_interest' && (
+        <div style={{
+          backgroundColor: 'rgba(239, 68, 68, 0.08)',
+          border: '1px solid rgba(239, 68, 68, 0.3)',
+          borderRadius: '8px',
+          padding: '10px 14px',
+          marginBottom: '14px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '10px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#FB7185', fontSize: '0.88rem', fontWeight: 600 }}>
+            <AlertTriangle size={16} />
+            <span>Filtrando boletos pagos com acréscimo de juros por atraso ({filteredPayables.length} {filteredPayables.length === 1 ? 'conta encontrada' : 'contas encontradas'})</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '0.85rem', color: '#F8FAFC' }}>
+              Total de juros pagos: <strong style={{ color: '#FB7185' }}>{formatCurrency(stats.interestTotal)}</strong>
+            </span>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('all')}
+              className="btn btn-secondary btn-sm"
+              style={{ fontSize: '0.75rem', padding: '3px 8px' }}
+            >
+              Limpar Filtro
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Payables Table */}
       <div className="table-container">
@@ -858,7 +957,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             ) : (
               filteredPayables.map((p) => {
                 let badgeClass = 'badge-neutral';
-                let statusLabel = 'A Vencer';
+                let statusLabel = 'Pendente';
 
                 if (p.is_paid) {
                   badgeClass = 'badge-success';
@@ -871,7 +970,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                   statusLabel = 'Vence Hoje';
                 } else if (p.calculatedStatus === 'due_soon') {
                   badgeClass = 'badge-info';
-                  statusLabel = 'Vence em Breve';
+                  statusLabel = 'A Vencer';
                 }
 
                 return (
@@ -892,7 +991,29 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                       <span className="badge badge-neutral">{p.category}</span>
                     </td>
                     <td style={{ fontWeight: 700, fontSize: '0.95rem' }}>
-                      {formatCurrency(p.amount)}
+                      <div>{formatCurrency(p.amount)}</div>
+                      {Number(p.interest_amount) > 0 && (
+                        <div 
+                          style={{ 
+                            fontSize: '0.7rem', 
+                            fontWeight: 600, 
+                            color: '#FB7185',
+                            backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                            border: '1px solid rgba(239, 68, 68, 0.25)',
+                            borderRadius: '4px',
+                            padding: '2px 5px',
+                            marginTop: '3px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            cursor: 'help'
+                          }}
+                          title={`Valor Original: ${formatCurrency(p.original_amount ?? (p.amount - (p.interest_amount || 0)))} | Juros por atraso: ${formatCurrency(p.interest_amount || 0)}`}
+                        >
+                          <AlertTriangle size={10} />
+                          +{formatCurrency(p.interest_amount || 0)} juros
+                        </div>
+                      )}
                     </td>
                     <td>
                       <span className={`badge ${badgeClass}`}>{statusLabel}</span>
@@ -1146,7 +1267,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
       {/* 2. PAYMENT / DAR BAIXA MODAL */}
       {payingPayable && (
         <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: '480px' }}>
+          <div className="modal-content" style={{ maxWidth: '520px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
               <h3 style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <CheckCircle2 size={20} color="#34D399" />
@@ -1161,21 +1282,42 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
               </button>
             </div>
 
+            {/* Boleto details card */}
             <div style={{ 
-              backgroundColor: 'rgba(52, 211, 153, 0.08)', 
-              border: '1px solid rgba(52, 211, 153, 0.25)', 
-              padding: '12px', 
-              borderRadius: '8px', 
+              backgroundColor: 'rgba(255, 255, 255, 0.03)', 
+              border: '1px solid var(--border-color)', 
+              padding: '14px', 
+              borderRadius: '10px', 
               marginBottom: '16px' 
             }}>
-              <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: '1rem' }}>
-                {payingPayable.supplier}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: '1.05rem' }}>
+                    {payingPayable.supplier}
+                  </div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '2px' }}>
+                    {payingPayable.description} ({payingPayable.installment_number}/{payingPayable.total_installments})
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                    Valor Original
+                  </div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#38BDF8' }}>
+                    {formatCurrency(payOriginalAmount)}
+                  </div>
+                </div>
               </div>
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                {payingPayable.description} ({payingPayable.installment_number}/{payingPayable.total_installments})
-              </div>
-              <div style={{ marginTop: '4px', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Vencimento original: <strong>{formatDate(payingPayable.due_date)}</strong>
+
+              <div style={{ display: 'flex', gap: '16px', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.06)', fontSize: '0.8rem' }}>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Vencimento: </span>
+                  <strong style={{ color: '#F8FAFC' }}>{formatDate(payingPayable.due_date)}</strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Categoria: </span>
+                  <strong style={{ color: '#F8FAFC' }}>{payingPayable.category}</strong>
+                </div>
               </div>
             </div>
 
@@ -1193,50 +1335,147 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                 </div>
 
                 <div className="form-group" style={{ margin: 0 }}>
-                  <label className="form-label">Valor Pago (R$) *</label>
-                  <div style={{ position: 'relative' }}>
-                    <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontWeight: 600 }}>
-                      R$
-                    </span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      className="input"
-                      style={{ paddingLeft: '38px', fontWeight: 700, color: '#34D399', fontSize: '1.05rem' }}
-                      value={isNaN(payAmount) ? '' : payAmount}
-                      onChange={(e) => setPayAmount(parseFloat(e.target.value) || 0)}
-                      required
-                    />
-                  </div>
+                  <label className="form-label">Forma de Pagamento Utilizada</label>
+                  <select 
+                    className="select" 
+                    value={payMethod} 
+                    onChange={(e) => setPayMethod(e.target.value)}
+                  >
+                    {PAYMENT_METHODS.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
-              <div className="form-group">
-                <label className="form-label">Forma de Pagamento Utilizada</label>
-                <select 
-                  className="select" 
-                  value={payMethod} 
-                  onChange={(e) => setPayMethod(e.target.value)}
-                >
-                  {PAYMENT_METHODS.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
+              {/* Payment & Interest Box */}
+              <div style={{ 
+                backgroundColor: payAmount > payOriginalAmount ? 'rgba(239, 68, 68, 0.04)' : 'rgba(255, 255, 255, 0.02)',
+                border: `1px solid ${payAmount > payOriginalAmount ? 'rgba(239, 68, 68, 0.3)' : 'var(--border-color)'}`,
+                padding: '14px',
+                borderRadius: '10px',
+                marginBottom: '16px'
+              }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '8px' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Valor Pago (Total) *</span>
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontWeight: 600, fontSize: '0.85rem' }}>
+                        R$
+                      </span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        className="input"
+                        style={{ 
+                          paddingLeft: '34px', 
+                          fontWeight: 700, 
+                          color: payAmount > payOriginalAmount ? '#FB7185' : '#34D399', 
+                          fontSize: '1.05rem' 
+                        }}
+                        value={isNaN(payAmount) ? '' : payAmount}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          setPayAmount(val);
+                          if (val > payOriginalAmount) {
+                            setPayInterestAmount(Math.round((val - payOriginalAmount) * 100) / 100);
+                          } else {
+                            setPayInterestAmount(0);
+                          }
+                        }}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label className="form-label" style={{ color: payInterestAmount > 0 ? '#FB7185' : 'var(--text-secondary)' }}>
+                      Juros / Multa Boleto (R$)
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: payInterestAmount > 0 ? '#FB7185' : 'var(--text-muted)', fontWeight: 600, fontSize: '0.85rem' }}>
+                        R$
+                      </span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className="input"
+                        style={{ 
+                          paddingLeft: '34px', 
+                          fontWeight: 700, 
+                          color: payInterestAmount > 0 ? '#FB7185' : 'var(--text-secondary)', 
+                          fontSize: '1.05rem',
+                          borderColor: payInterestAmount > 0 ? 'rgba(239, 68, 68, 0.4)' : undefined
+                        }}
+                        value={isNaN(payInterestAmount) ? '' : payInterestAmount}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          setPayInterestAmount(val);
+                          setPayAmount(Math.round((payOriginalAmount + val) * 100) / 100);
+                        }}
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Dynamic warning banner if payment is higher than original */}
+                {payAmount > payOriginalAmount && (
+                  <div style={{ 
+                    backgroundColor: 'rgba(239, 68, 68, 0.08)', 
+                    border: '1px solid rgba(239, 68, 68, 0.25)', 
+                    borderRadius: '8px', 
+                    padding: '10px 12px',
+                    marginTop: '8px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#FB7185', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <AlertTriangle size={14} /> Juros de Boleto Identificado
+                      </span>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FB7185', backgroundColor: 'rgba(239, 68, 68, 0.15)', padding: '1px 6px', borderRadius: '4px' }}>
+                        +{(((payAmount - payOriginalAmount) / (payOriginalAmount || 1)) * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                      Valor base do insumo: <strong style={{ color: '#F8FAFC' }}>{formatCurrency(payOriginalAmount)}</strong>
+                      <br />
+                      Juros por atraso: <strong style={{ color: '#FB7185' }}>+{formatCurrency(payAmount - payOriginalAmount)}</strong>
+                    </div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '4px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '4px' }}>
+                      O custo original do insumo será mantido e os juros serão rastreados no controle de juros de boletos.
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Informative notice - only records in Insumos */}
+              {/* Notes */}
+              <div className="form-group" style={{ marginBottom: '16px' }}>
+                <label className="form-label">Observações do Pagamento</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={payNotes}
+                  onChange={(e) => setPayNotes(e.target.value)}
+                  placeholder={payAmount > payOriginalAmount ? "Ex: Boleto pago com juros bancários por atraso" : "Ex: Pago via banco..."}
+                />
+              </div>
+
+              {/* Informative notice */}
               <div style={{ 
-                backgroundColor: 'rgba(56, 189, 248, 0.08)', 
-                padding: '12px', 
+                backgroundColor: 'rgba(56, 189, 248, 0.06)', 
+                padding: '10px 12px', 
                 borderRadius: '8px', 
-                border: '1px solid rgba(56, 189, 248, 0.2)',
+                border: '1px solid rgba(56, 189, 248, 0.18)',
                 marginBottom: '16px',
-                fontSize: '0.85rem',
+                fontSize: '0.8rem',
                 color: 'var(--text-secondary)'
               }}>
-                <span style={{ color: '#38BDF8', fontWeight: 600 }}>Registro exclusivo em Insumos: </span>
-                A conta será marcada como paga nesta categoria, sem lançamento automático na aba de Saídas.
+                <span style={{ color: '#38BDF8', fontWeight: 600 }}>Registro em Insumos: </span>
+                A conta será marcada como liquidada com histórico de juros, sem duplicar lançamentos no caixa manual.
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>

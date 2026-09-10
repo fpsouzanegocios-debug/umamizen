@@ -14,12 +14,14 @@ import {
   X,
   Fish,
   LogOut,
-  Building2
+  Building2,
+  BarChart3
 } from 'lucide-react';
 import { AuthUser } from '../../lib/auth';
 
 export type TabType = 
   | 'dashboard' 
+  | 'performance'
   | 'orders' 
   | 'couriers' 
   | 'payables' 
@@ -56,6 +58,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'performance', label: 'Desempenho', icon: BarChart3 },
     { 
       id: 'orders', 
       label: 'Pedidos', 

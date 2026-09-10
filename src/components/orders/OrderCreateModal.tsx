@@ -172,7 +172,9 @@ export const OrderCreateModal: React.FC<OrderCreateModalProps> = ({
 
     setIsSaving(true);
     try {
-      const fullDateTime = `${orderDate}T${orderTime}:00`;
+      const [y, m, d] = orderDate.split('-').map(Number);
+      const [h, min] = (orderTime || '12:00').split(':').map(Number);
+      const fullDateTime = new Date(y, m - 1, d, h || 0, min || 0, 0).toISOString();
       const isCanceled = status.toLowerCase().includes('cancelad');
 
       // Check if external_order_id already exists
