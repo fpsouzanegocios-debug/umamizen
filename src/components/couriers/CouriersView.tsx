@@ -220,16 +220,18 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
     let totalPaid = 0;
     let paidDeliveriesCount = 0;
+    let pendingToPay = 0;
+    let pendingDeliveriesCount = 0;
 
     dailySettlements.forEach((item) => {
       if (item.isPaid) {
         totalPaid += Number(item.payment?.paid_amount) || Number(item.payment?.total_paid) || item.totalToPay;
         paidDeliveriesCount += item.totalDeliveries;
+      } else {
+        pendingToPay += item.totalToPay;
+        pendingDeliveriesCount += item.totalDeliveries;
       }
     });
-
-    const pendingToPay = Math.max(0, totalGross - totalPaid);
-    const pendingDeliveriesCount = Math.max(0, totalDeliveries - paidDeliveriesCount);
 
     return {
       totalDeliveries,
