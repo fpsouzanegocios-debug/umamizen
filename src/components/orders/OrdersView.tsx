@@ -24,7 +24,7 @@ import {
   DateRange 
 } from '../../types';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
-import { isDateInRange } from '../../lib/dateUtils';
+import { isDateInRange, getOperationalDateKey } from '../../lib/dateUtils';
 import { OrderEditModal } from './OrderEditModal';
 import { OrderCreateModal } from './OrderCreateModal';
 import { OrderHistoryModal } from './OrderHistoryModal';
@@ -106,9 +106,17 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
         if (dateRange) {
           if (!isDateInRange(o.order_date, dateRange)) return false;
         } else {
-          const d = new Date(o.order_date);
-          if (d.getMonth() + 1 !== selectedMonth || d.getFullYear() !== selectedYear) {
-            return false;
+          const opKey = getOperationalDateKey(o.order_date);
+          if (opKey && /^\d{4}-\d{2}-\d{2}$/.test(opKey)) {
+            const [y, m] = opKey.split('-').map(Number);
+            if (m !== selectedMonth || y !== selectedYear) {
+              return false;
+            }
+          } else {
+            const d = new Date(o.order_date);
+            if (d.getMonth() + 1 !== selectedMonth || d.getFullYear() !== selectedYear) {
+              return false;
+            }
           }
         }
       }

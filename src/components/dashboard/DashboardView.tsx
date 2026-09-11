@@ -37,7 +37,7 @@ import {
   FixedCost
 } from '../../types';
 import { formatCurrency, formatPercent } from '../../lib/formatters';
-import { isDateInRange, getLocalDateKey } from '../../lib/dateUtils';
+import { isDateInRange, getLocalDateKey, getOperationalDateKey, getOperationalTodayKey } from '../../lib/dateUtils';
 import { TabType } from '../layout/Sidebar';
 import { DateRangePicker } from '../common/DateRangePicker';
 
@@ -94,6 +94,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       if (dateRange) {
         return isDateInRange(o.order_date, dateRange);
       }
+      const opKey = getOperationalDateKey(o.order_date);
+      if (opKey && /^\d{4}-\d{2}-\d{2}$/.test(opKey)) {
+        const [y, m] = opKey.split('-').map(Number);
+        return m === selectedMonth && y === selectedYear;
+      }
       const d = new Date(o.order_date);
       return d.getMonth() + 1 === selectedMonth && d.getFullYear() === selectedYear;
     });
@@ -110,6 +115,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const previousCompletedOrders = useMemo(() => {
     return orders.filter((o) => {
       if (o.is_canceled) return false;
+      const opKey = getOperationalDateKey(o.order_date);
+      if (opKey && /^\d{4}-\d{2}-\d{2}$/.test(opKey)) {
+        const [y, m] = opKey.split('-').map(Number);
+        return m === previousMonth && y === previousYear;
+      }
       const d = new Date(o.order_date);
       return d.getMonth() + 1 === previousMonth && d.getFullYear() === previousYear;
     });
@@ -125,9 +135,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     const net = completedOrders.reduce((acc, o) => acc + Number(o.net_amount || 0), 0);
     const avgTicket = count > 0 ? gross / count : 0;
 
-    // Today's gross
-    const todayStr = getLocalDateKey();
-    const todayOrders = completedOrders.filter((o) => getLocalDateKey(new Date(o.order_date)) === todayStr);
+    // Today's gross (operational shift aware)
+    const todayStr = getOperationalTodayKey();
+    const todayOrders = completedOrders.filter((o) => getOperationalDateKey(o.order_date) === todayStr);
     const grossToday = todayOrders.reduce((acc, o) => acc + Number(o.gross_amount || 0), 0);
 
     return { count, gross, platformFees, cardFees, adjustments, net, avgTicket, grossToday };
@@ -142,11 +152,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return { count, gross, net, avgTicket };
   }, [previousCompletedOrders]);
 
-  // Deliveries in current period
+  // Deliveries in current period (operational shift aware)
   const currentDeliveries = useMemo(() => {
     return deliveries.filter((d) => {
       if (dateRange) {
         return isDateInRange(d.delivery_date, dateRange);
+      }
+      const opKey = getOperationalDateKey(d.delivery_date);
+      if (opKey && /^\d{4}-\d{2}-\d{2}$/.test(opKey)) {
+        const [y, m] = opKey.split('-').map(Number);
+        return m === selectedMonth && y === selectedYear;
       }
       const dt = new Date(d.delivery_date);
       return dt.getMonth() + 1 === selectedMonth && dt.getFullYear() === selectedYear;

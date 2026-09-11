@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { Courier, Delivery, Order, NeighborhoodRate, SystemSettings, DateRange, CourierDailyPayment } from '../../types';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
-import { isDateInRange } from '../../lib/dateUtils';
+import { isDateInRange, getOperationalDateKey } from '../../lib/dateUtils';
 import { supabase } from '../../lib/supabase';
 import { calculateDeliveryRates } from '../../lib/calculations';
 import { normalizeNeighborhoodName } from '../../lib/neighborhoodMatcher';
@@ -41,6 +41,8 @@ interface CouriersViewProps {
   onRefresh: () => void;
   selectedMonth: number;
   selectedYear: number;
+  onMonthChange?: (month: number) => void;
+  onYearChange?: (year: number) => void;
   dateRange?: DateRange;
   onDateRangeChange?: (range: DateRange) => void;
 }
@@ -54,14 +56,16 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   onRefresh,
   selectedMonth,
   selectedYear,
+  onMonthChange,
+  onYearChange,
   dateRange,
   onDateRangeChange
 }) => {
   const [selectedCourierName, setSelectedCourierName] = useState<string>('all');
+  const [showAddModal, setShowAddModal] = useState<boolean>(false);
   const [newCourierName, setNewCourierName] = useState<string>('');
   const [newCourierPhone, setNewCourierPhone] = useState<string>('');
   const [newCourierPix, setNewCourierPix] = useState<string>('');
-  const [showAddModal, setShowAddModal] = useState<boolean>(false);
   const [showAddDeliveryModal, setShowAddDeliveryModal] = useState<boolean>(false);
   const [editingDelivery, setEditingDelivery] = useState<Delivery | null>(null);
   const [editDeliveryRate, setEditDeliveryRate] = useState<number>(8.00);
@@ -69,7 +73,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   const [deletingDelivery, setDeletingDelivery] = useState<Delivery | null>(null);
   const [isDeletingDelivery, setIsDeletingDelivery] = useState<boolean>(false);
 
-  // Daily Payments State
+  // Daily Settlement / Payments state (Section 16)
   const [dailyPayments, setDailyPayments] = useState<CourierDailyPayment[]>([]);
   const [paymentModalData, setPaymentModalData] = useState<{
     courierName: string;
@@ -78,20 +82,23 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
     dayDeliveries: Delivery[];
     existingPayment?: CourierDailyPayment | null;
   } | null>(null);
-
-  // Daily Settlements View and Filter State
   const [settlementFilter, setSettlementFilter] = useState<'all' | 'pending' | 'paid'>('all');
-  const [settlementViewMode, setSettlementViewMode] = useState<'cards' | 'table'>('table');
+  const [settlementViewMode, setSettlementViewMode] = useState<'table' | 'cards'>('table');
   const [settlementCollapsed, setSettlementCollapsed] = useState<boolean>(false);
 
+  // Fetch registered courier payments from database
   const fetchDailyPayments = async () => {
     try {
-      const { data, error } = await supabase.from('courier_daily_payments').select('*');
-      if (!error && data) {
-        setDailyPayments(data as CourierDailyPayment[]);
+      const { data, error } = await supabase
+        .from('courier_daily_payments')
+        .select('*');
+      if (error) {
+        console.error('Erro ao buscar pagamentos de diárias:', error);
+      } else if (data) {
+        setDailyPayments(data);
       }
     } catch (err) {
-      console.error('Erro ao buscar pagamentos de motoboys:', err);
+      console.error('Falha ao consultar courier_daily_payments:', err);
     }
   };
 
@@ -110,17 +117,16 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
       if (error) throw error;
 
-      onRefresh();
       setDeletingDelivery(null);
+      onRefresh();
     } catch (err: any) {
-      console.error('Erro ao excluir entrega:', err);
-      alert('Erro ao excluir entrega: ' + (err.message || String(err)));
+      alert('Erro ao excluir entrega: ' + err.message);
     } finally {
       setIsDeletingDelivery(false);
     }
   };
 
-  // Map orders by external_order_id for reconciliation
+  // Pre-index orders by external_order_id for fast lookup
   const ordersMap = useMemo(() => {
     const map = new Map<string, Order>();
     orders.forEach((o) => map.set(o.external_order_id, o));
@@ -133,9 +139,17 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       if (dateRange) {
         if (!isDateInRange(d.delivery_date, dateRange)) return false;
       } else {
-        const dt = new Date(d.delivery_date);
-        if (dt.getMonth() + 1 !== selectedMonth || dt.getFullYear() !== selectedYear) {
-          return false;
+        const opKey = getOperationalDateKey(d.delivery_date);
+        if (opKey && /^\d{4}-\d{2}-\d{2}$/.test(opKey)) {
+          const [y, m] = opKey.split('-').map(Number);
+          if (m !== selectedMonth || y !== selectedYear) {
+            return false;
+          }
+        } else {
+          const dt = new Date(d.delivery_date);
+          if (dt.getMonth() + 1 !== selectedMonth || dt.getFullYear() !== selectedYear) {
+            return false;
+          }
         }
       }
       if (selectedCourierName !== 'all' && d.courier_name !== selectedCourierName) {
@@ -145,7 +159,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
     });
   }, [deliveries, dateRange, selectedMonth, selectedYear, selectedCourierName]);
 
-  // Group deliveries by Date (YYYY-MM-DD) and Courier for daily settlement / payment control
+  // Group deliveries by Operational Date (YYYY-MM-DD) and Courier for daily settlement / payment control
   const dailySettlements = useMemo(() => {
     const map = new Map<string, {
       dateStr: string;
@@ -162,7 +176,8 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
     filteredDeliveries.forEach((d) => {
       if (!d.delivery_date || !d.courier_name) return;
-      const dateStr = d.delivery_date.slice(0, 10);
+      const dateStr = getOperationalDateKey(d.delivery_date);
+      if (!dateStr) return;
       const key = `${dateStr}__${d.courier_name.toLowerCase()}`;
 
       if (!map.has(key)) {

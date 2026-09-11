@@ -56,6 +56,83 @@ export const getLocalDateKey = (date: Date = new Date()): string => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
+/**
+ * Returns the operational date key (YYYY-MM-DD) for a given date/timestamp.
+ * In delivery restaurants operating at night (e.g. 18h to 02h), orders and deliveries
+ * between 00:00:00 and 05:59:59 belong to the previous calendar day's night shift (operational day).
+ */
+export const getOperationalDateKey = (
+  dateInput: string | Date | null | undefined,
+  cutoffHour: number = 6
+): string => {
+  if (!dateInput) return '';
+
+  if (dateInput instanceof Date) {
+    if (isNaN(dateInput.getTime())) return '';
+    const d = new Date(dateInput);
+    if (d.getHours() < cutoffHour) {
+      d.setDate(d.getDate() - 1);
+    }
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  const str = String(dateInput).trim();
+  // Matches "YYYY-MM-DD" followed by optional space/T and "HH:mm"
+  const match = str.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s]+(\d{1,2}):(\d{1,2}))?/);
+  if (!match) {
+    const d = new Date(str);
+    if (isNaN(d.getTime())) return str.slice(0, 10);
+    if (d.getHours() < cutoffHour) {
+      d.setDate(d.getDate() - 1);
+    }
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  const [, y, m, d, h] = match;
+  const year = Number(y);
+  const month = Number(m);
+  const day = Number(d);
+
+  if (h !== undefined) {
+    const hour = Number(h);
+    if (hour < cutoffHour) {
+      const dateObj = new Date(year, month - 1, day);
+      dateObj.setDate(dateObj.getDate() - 1);
+      const yyyy = dateObj.getFullYear();
+      const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+      const dd = String(dateObj.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+  }
+
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+};
+
+/**
+ * Returns a Date set to noon (12:00:00) of the operational day.
+ */
+export const getOperationalDate = (
+  dateInput: string | Date | null | undefined,
+  cutoffHour: number = 6
+): Date => {
+  const key = getOperationalDateKey(dateInput, cutoffHour);
+  if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return new Date(NaN);
+  const [year, month, day] = key.split('-').map(Number);
+  return new Date(year, month - 1, day, 12, 0, 0);
+};
+
+/**
+ * Returns today's operational date key (considering current hour < 6 is still yesterday's shift)
+ */
+export const getOperationalTodayKey = (cutoffHour: number = 6): string => {
+  return getOperationalDateKey(new Date(), cutoffHour);
+};
 
 /**
  * Formats a Date to DD/MM/AAAA HH:mm
@@ -77,16 +154,28 @@ export const formatTimeBR = (date: Date): string => {
 };
 
 /**
- * Checks if a given date string or Date is within the specified DateRange
+ * Checks if a given date string or Date is within the specified DateRange.
+ * By default, enables operational shift awareness for restaurant night shifts.
  */
 export const isDateInRange = (
   dateInput: string | Date | null | undefined,
-  range: DateRange
+  range: DateRange,
+  useOperationalShift: boolean = true
 ): boolean => {
   if (!dateInput) return false;
+
+  if (useOperationalShift) {
+    const opKey = getOperationalDateKey(dateInput, 6);
+    if (opKey && /^\d{4}-\d{2}-\d{2}$/.test(opKey)) {
+      const [year, month, day] = opKey.split('-').map(Number);
+      const opDate = new Date(year, month - 1, day, 12, 0, 0);
+      const time = opDate.getTime();
+      return time >= startOfDay(range.startDate).getTime() && time <= endOfDay(range.endDate).getTime();
+    }
+  }
+
   let d: Date;
   if (typeof dateInput === 'string') {
-    // If format is YYYY-MM-DD without time, parse in local time
     if (/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
       const [year, month, day] = dateInput.split('-').map(Number);
       d = new Date(year, month - 1, day, 12, 0, 0);
@@ -101,7 +190,7 @@ export const isDateInRange = (
 
   if (isNaN(d.getTime())) return false;
   const time = d.getTime();
-  return time >= range.startDate.getTime() && time <= range.endDate.getTime();
+  return time >= startOfDay(range.startDate).getTime() && time <= endOfDay(range.endDate).getTime();
 };
 
 /**
