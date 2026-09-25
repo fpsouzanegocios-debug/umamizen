@@ -38,6 +38,8 @@ export const DeliveryCreateModal: React.FC<DeliveryCreateModalProps> = ({
   const [notes, setNotes] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
+  const padZero = (n: number) => String(n).padStart(2, '0');
+
   useEffect(() => {
     if (isOpen) {
       // Pick default courier
@@ -49,17 +51,18 @@ export const DeliveryCreateModal: React.FC<DeliveryCreateModalProps> = ({
         setCourierName('');
       }
 
-      // Default date
-      if (defaultDate) {
-        setDeliveryDate(`${defaultDate}T${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', hour12: false })}`);
+      // Safe date formatting for <input type="datetime-local"> (YYYY-MM-DDTHH:mm)
+      const now = new Date();
+      const hh = padZero(now.getHours());
+      const mm = padZero(now.getMinutes());
+
+      if (defaultDate && /^\d{4}-\d{2}-\d{2}$/.test(defaultDate)) {
+        setDeliveryDate(`${defaultDate}T${hh}:${mm}`);
       } else {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        setDeliveryDate(`${year}-${month}-${day}T${hours}:${minutes}`);
+        const y = now.getFullYear();
+        const m = padZero(now.getMonth() + 1);
+        const d = padZero(now.getDate());
+        setDeliveryDate(`${y}-${m}-${d}T${hh}:${mm}`);
       }
 
       setDeliveryType('return');
@@ -116,6 +119,34 @@ export const DeliveryCreateModal: React.FC<DeliveryCreateModalProps> = ({
 
   const matchedCourier = couriers.find((c) => c.name.toLowerCase() === courierName.toLowerCase());
 
+  // Converts datetime-local input string safely to ISO format without throwing Invalid Date
+  const parseDeliveryDateToIso = (inputDateStr: string): string => {
+    if (!inputDateStr) return new Date().toISOString();
+    try {
+      if (inputDateStr.includes('T')) {
+        const [dPart, tPart] = inputDateStr.split('T');
+        const [y, m, d] = dPart.split('-').map(Number);
+        const [hh, mm] = (tPart || '00:00').split(':').map(Number);
+        if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+          const parsed = new Date(y, m - 1, d, isNaN(hh) ? 0 : hh, isNaN(mm) ? 0 : mm, 0);
+          if (!isNaN(parsed.getTime())) return parsed.toISOString();
+        }
+      } else if (inputDateStr.includes('-')) {
+        const [y, m, d] = inputDateStr.split('-').map(Number);
+        const now = new Date();
+        if (!isNaN(y) && !isNaN(m) && !isNaN(d)) {
+          const parsed = new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds());
+          if (!isNaN(parsed.getTime())) return parsed.toISOString();
+        }
+      }
+      const direct = new Date(inputDateStr);
+      if (!isNaN(direct.getTime())) return direct.toISOString();
+    } catch (err) {
+      console.error('Erro ao converter data de entrega:', err);
+    }
+    return new Date().toISOString();
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!courierName.trim()) {
@@ -132,18 +163,21 @@ export const DeliveryCreateModal: React.FC<DeliveryCreateModalProps> = ({
       const feeNum = Number(customCourierFee) || baseRate;
       const addNum = Math.max(0, Math.round((feeNum - baseRate) * 100) / 100);
 
+      let finalOrderNumber = orderNumber.trim();
+      if (!finalOrderNumber || finalOrderNumber === 'RET-') {
+        finalOrderNumber = deliveryType === 'return' ? `RET-${Date.now().toString().slice(-4)}` : 'MANUAL';
+      }
+
+      const prefix = deliveryType === 'return' ? 'RET' : 'MAN';
+      const uniqueExtId = `${prefix}-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
       const payload = {
         id: crypto.randomUUID(),
-        external_order_id: `MAN-${Date.now().toString().slice(-6)}`,
-        order_number: orderNumber.trim() || 'RETORNO',
+        external_order_id: uniqueExtId,
+        order_number: finalOrderNumber,
         courier_id: matchedCourier ? matchedCourier.id : null,
         courier_name: courierName.trim(),
-        delivery_date: (() => {
-          if (!deliveryDate) return new Date().toISOString();
-          const [y, m, d] = deliveryDate.split('-').map(Number);
-          const now = new Date();
-          return new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds()).toISOString();
-        })(),
+        delivery_date: parseDeliveryDateToIso(deliveryDate),
         order_amount: Number(orderAmount) || 0,
         payment_method: paymentMethod,
         neighborhood_name: matchedRate ? matchedRate.name : neighborhoodName.trim().toUpperCase(),
@@ -157,13 +191,14 @@ export const DeliveryCreateModal: React.FC<DeliveryCreateModalProps> = ({
         pending_issue_reason: null,
         is_manually_edited: true,
         is_paid: false,
-        notes: notes.trim()
+        notes: notes.trim(),
+        is_return: deliveryType === 'return'
       };
 
       const { error } = await supabase.from('deliveries').insert(payload);
       if (error) throw error;
 
-      alert('Entrega adicionada com sucesso!');
+      alert(deliveryType === 'return' ? 'Retorno adicionado com sucesso!' : 'Entrega manual adicionada com sucesso!');
       onSuccess();
       onClose();
     } catch (err: any) {

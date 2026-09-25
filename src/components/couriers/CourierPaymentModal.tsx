@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Check, DollarSign, Calendar, Copy, CheckCheck, AlertCircle, RotateCcw } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { Courier, Delivery, CourierDailyPayment } from '../../types';
+import { Courier, Delivery, CourierDailyPayment, Order } from '../../types';
 import { formatCurrency } from '../../lib/formatters';
 
 interface CourierPaymentModalProps {
@@ -13,6 +13,8 @@ interface CourierPaymentModalProps {
   dateStr: string; // YYYY-MM-DD
   dayDeliveries: Delivery[];
   existingPayment?: CourierDailyPayment | null;
+  initialRetainedCash?: number;
+  ordersMap?: Map<string, Order>;
 }
 
 export const CourierPaymentModal: React.FC<CourierPaymentModalProps> = ({
@@ -23,30 +25,61 @@ export const CourierPaymentModal: React.FC<CourierPaymentModalProps> = ({
   courier,
   dateStr,
   dayDeliveries,
-  existingPayment
+  existingPayment,
+  initialRetainedCash,
+  ordersMap
 }) => {
+  const isDaniel = courierName.toLowerCase().includes('daniel');
   const [paidAmount, setPaidAmount] = useState<number | string>(0);
   const [paymentDate, setPaymentDate] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<string>('Pix');
   const [notes, setNotes] = useState<string>('');
   const [copiedPix, setCopiedPix] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [retainedCash, setRetainedCash] = useState<number | string>(0);
 
   // Calculations for this day
   const totalDeliveries = dayDeliveries.length;
   const baseTotal = dayDeliveries.reduce((acc, d) => acc + (Number(d.base_rate) || 8.00), 0);
   const additionalsTotal = dayDeliveries.reduce((acc, d) => acc + (Number(d.additional_rate) || 0), 0);
-  const totalToPay = baseTotal + additionalsTotal;
+  const grossTotal = baseTotal + additionalsTotal;
+
+  // Calculate sum of cash orders for this day
+  const ordersCashTotal = React.useMemo(() => {
+    let sum = 0;
+    dayDeliveries.forEach((d) => {
+      const order = ordersMap?.get(d.external_order_id);
+      const payMethod = (order?.final_payment_method || order?.original_payment_method || d.payment_method || '').toLowerCase();
+      if (payMethod.includes('dinheiro') || payMethod === 'cash') {
+        sum += Number(order?.gross_amount ?? d.order_amount ?? 0);
+      }
+    });
+    return sum;
+  }, [dayDeliveries, ordersMap]);
+
+  const numRetained = isDaniel ? (Number(retainedCash) || 0) : 0;
+  const netTotalToPay = isDaniel ? (grossTotal - numRetained) : grossTotal;
 
   useEffect(() => {
     if (isOpen) {
+      const effectiveRetained = isDaniel
+        ? (existingPayment?.retained_cash !== undefined && existingPayment?.retained_cash !== null
+            ? Number(existingPayment.retained_cash)
+            : (initialRetainedCash !== undefined ? initialRetainedCash : ordersCashTotal))
+        : 0;
+
+      setRetainedCash(effectiveRetained);
+
+      const computedNet = isDaniel ? (grossTotal - effectiveRetained) : grossTotal;
+      const defaultToPay = Math.max(0, computedNet);
+
       if (existingPayment && existingPayment.is_paid) {
-        setPaidAmount(Number(existingPayment.paid_amount) || totalToPay);
+        setPaidAmount(Number(existingPayment.paid_amount) || defaultToPay);
         setPaymentDate(existingPayment.payment_date || dateStr);
         setPaymentMethod(existingPayment.payment_method || 'Pix');
         setNotes(existingPayment.notes || '');
       } else {
-        setPaidAmount(totalToPay);
+        setPaidAmount(defaultToPay);
         const today = new Date().toISOString().slice(0, 10);
         setPaymentDate(today);
         setPaymentMethod('Pix');
@@ -54,7 +87,14 @@ export const CourierPaymentModal: React.FC<CourierPaymentModalProps> = ({
       }
       setCopiedPix(false);
     }
-  }, [isOpen, existingPayment, totalToPay, dateStr]);
+  }, [isOpen, existingPayment, grossTotal, dateStr, isDaniel, initialRetainedCash, ordersCashTotal]);
+
+  const handleRetainedCashChange = (valStr: string) => {
+    setRetainedCash(valStr);
+    const num = Number(valStr) || 0;
+    const computedNet = grossTotal - num;
+    setPaidAmount(Math.max(0, computedNet));
+  };
 
   if (!isOpen) return null;
 
@@ -70,29 +110,31 @@ export const CourierPaymentModal: React.FC<CourierPaymentModalProps> = ({
     e.preventDefault();
     setIsSubmitting(true);
     try {
-      const numPaid = Number(paidAmount) || totalToPay;
+    const numPaid = Number(paidAmount) || 0;
+    const effectiveTotalAmount = isDaniel ? netTotalToPay : grossTotal;
 
-      // 1. Upsert courier_daily_payments with all column aliases for full database compatibility
-      const payload = {
-        courier_id: courier?.id || null,
-        courier_name: courierName,
-        payment_date: dateStr,
-        delivery_count: totalDeliveries,
-        total_deliveries: totalDeliveries,
-        base_total: baseTotal,
-        base_amount: baseTotal,
-        additional_total: additionalsTotal,
-        additional_amount: additionalsTotal,
-        total_paid: numPaid,
-        paid_amount: numPaid,
-        total_amount: totalToPay,
-        payment_method: paymentMethod,
-        is_paid: true,
-        paid_at: new Date().toISOString(),
-        paid_by: 'Administrador',
-        notes: notes.trim(),
-        updated_at: new Date().toISOString()
-      };
+    // 1. Upsert courier_daily_payments with all column aliases for full database compatibility
+    const payload = {
+      courier_id: courier?.id || null,
+      courier_name: courierName,
+      payment_date: dateStr,
+      delivery_count: totalDeliveries,
+      total_deliveries: totalDeliveries,
+      base_total: baseTotal,
+      base_amount: baseTotal,
+      additional_total: additionalsTotal,
+      additional_amount: additionalsTotal,
+      retained_cash: numRetained,
+      total_paid: numPaid,
+      paid_amount: numPaid,
+      total_amount: effectiveTotalAmount,
+      payment_method: paymentMethod,
+      is_paid: true,
+      paid_at: new Date().toISOString(),
+      paid_by: 'Administrador',
+      notes: notes.trim(),
+      updated_at: new Date().toISOString()
+    };
 
       const { data: savedPayment, error: payErr } = await supabase
         .from('courier_daily_payments')
@@ -221,7 +263,7 @@ export const CourierPaymentModal: React.FC<CourierPaymentModalProps> = ({
             EXTRATO DO DIA ({formattedDay})
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '12px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '12px' }}>
             <div>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Entregas</div>
               <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{totalDeliveries}</div>
@@ -233,26 +275,117 @@ export const CourierPaymentModal: React.FC<CourierPaymentModalProps> = ({
               </div>
             </div>
             <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Adicionais Bairros</div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Adicionais</div>
               <div style={{ fontSize: '1.1rem', fontWeight: 600, color: '#FBBF24' }}>
                 +{formatCurrency(additionalsTotal)}
               </div>
             </div>
+            <div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Total Diária (Bruto)</div>
+              <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#F8FAFC' }}>
+                {formatCurrency(grossTotal)}
+              </div>
+            </div>
           </div>
+
+          {/* Bloco exclusivo para Daniel: Dinheiro dos pedidos retido */}
+          {isDaniel && (
+            <div style={{
+              marginTop: '12px',
+              padding: '10px 14px',
+              backgroundColor: 'rgba(244, 63, 94, 0.08)',
+              border: '1px solid rgba(244, 63, 94, 0.25)',
+              borderRadius: '8px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#F43F5E', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  💵 Dinheiro que ficou com o Daniel (Desconto na Diária):
+                </span>
+                {ordersCashTotal > 0 && (
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    Pedidos em dinheiro: <strong>{formatCurrency(ordersCashTotal)}</strong>
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ position: 'relative', width: '150px' }}>
+                  <span style={{
+                    position: 'absolute',
+                    left: '10px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    color: '#F43F5E'
+                  }}>
+                    -R$
+                  </span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={retainedCash}
+                    onChange={(e) => handleRetainedCashChange(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '6px 10px 6px 36px',
+                      backgroundColor: 'var(--bg-card)',
+                      border: '1px solid rgba(244, 63, 94, 0.5)',
+                      borderRadius: '6px',
+                      color: '#F43F5E',
+                      fontSize: '0.95rem',
+                      fontWeight: 700,
+                      outline: 'none'
+                    }}
+                  />
+                </div>
+                {ordersCashTotal > 0 && Number(retainedCash) !== ordersCashTotal && (
+                  <button
+                    type="button"
+                    onClick={() => handleRetainedCashChange(String(ordersCashTotal))}
+                    className="btn btn-secondary btn-sm"
+                    style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.72rem', padding: '4px 8px' }}
+                    title="Preencher com o total dos pedidos recebidos em dinheiro"
+                  >
+                    <RotateCcw size={12} />
+                    <span>Usar valor dos pedidos ({formatCurrency(ordersCashTotal)})</span>
+                  </button>
+                )}
+              </div>
+              <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                Este valor de dinheiro em mãos será descontado automaticamente do total da diária.
+              </p>
+            </div>
+          )}
 
           <div style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            paddingTop: '10px',
+            paddingTop: '12px',
+            marginTop: '12px',
             borderTop: '1px solid var(--border-color)'
           }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#34D399' }}>
-              TOTAL CALCULADO DO DIA:
-            </span>
-            <span style={{ fontSize: '1.45rem', fontWeight: 800, color: '#34D399' }}>
-              {formatCurrency(totalToPay)}
-            </span>
+            <div>
+              <span style={{ fontSize: '0.82rem', fontWeight: 600, color: netTotalToPay < 0 ? '#F43F5E' : '#34D399' }}>
+                {isDaniel ? 'TOTAL LÍQUIDO A PAGAR DA DIÁRIA:' : 'TOTAL CALCULADO DO DIA:'}
+              </span>
+              {isDaniel && numRetained > 0 && (
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  Base R$ {formatCurrency(grossTotal)} - Retido {formatCurrency(numRetained)}
+                </div>
+              )}
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <span style={{ fontSize: '1.45rem', fontWeight: 800, color: netTotalToPay < 0 ? '#F43F5E' : '#34D399' }}>
+                {formatCurrency(netTotalToPay)}
+              </span>
+              {netTotalToPay < 0 && (
+                <div style={{ fontSize: '0.72rem', color: '#F43F5E', fontWeight: 700 }}>
+                  (Daniel deve devolver {formatCurrency(Math.abs(netTotalToPay))})
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

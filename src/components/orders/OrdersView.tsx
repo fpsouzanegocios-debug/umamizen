@@ -13,7 +13,8 @@ import {
   FileSpreadsheet,
   Plus,
   Trash2,
-  X
+  X,
+  Wand2
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { 
@@ -25,6 +26,7 @@ import {
 } from '../../types';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
 import { isDateInRange, getOperationalDateKey } from '../../lib/dateUtils';
+import { autoResolvePendingNeighborhoodOrders } from '../../lib/neighborhoodSync';
 import { OrderEditModal } from './OrderEditModal';
 import { OrderCreateModal } from './OrderCreateModal';
 import { OrderHistoryModal } from './OrderHistoryModal';
@@ -95,6 +97,37 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
       alert('Erro ao excluir pedido: ' + (err.message || String(err)));
     } finally {
       setIsDeletingOrder(false);
+    }
+  };
+
+  const [isAutoResolving, setIsAutoResolving] = useState<boolean>(false);
+
+  const pendingNeighborhoodOrdersCount = useMemo(() => {
+    return orders.filter(
+      (o) => o.has_pending_issue && o.pending_issue_reason === 'Conferir bairro'
+    ).length;
+  }, [orders]);
+
+  const handleAutoResolveNeighborhoods = async () => {
+    setIsAutoResolving(true);
+    try {
+      const res = await autoResolvePendingNeighborhoodOrders(settings);
+      if (res.resolvedOrders > 0) {
+        const summary = res.details
+          .slice(0, 15)
+          .map((d) => `• Pedido #${d.orderNumber}: "${d.originalName}" ➔ ${d.matchedName} (${d.method})`)
+          .join('\n');
+        const extraCount = res.details.length > 15 ? `\n... e mais ${res.details.length - 15} pedido(s)` : '';
+        alert(`✅ Sucesso!\n\n${res.resolvedOrders} pedido(s) corrigido(s) com sucesso!\n${res.registeredAliases} novo(s) apelido(s) de bairro registrado(s) no sistema.\n\nDetalhes:\n${summary}${extraCount}`);
+        onRefresh();
+      } else {
+        alert('Nenhum pedido pendente com bairro similar pôde ser identificado automaticamente.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert('Erro ao corrigir bairros automaticamente: ' + (err.message || String(err)));
+    } finally {
+      setIsAutoResolving(false);
     }
   };
 
@@ -208,6 +241,27 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
           <button
             type="button"
+            className="btn btn-secondary"
+            onClick={handleAutoResolveNeighborhoods}
+            disabled={isAutoResolving}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '0.84rem',
+              backgroundColor: pendingNeighborhoodOrdersCount > 0 ? 'rgba(245, 158, 11, 0.15)' : undefined,
+              borderColor: pendingNeighborhoodOrdersCount > 0 ? '#F59E0B' : undefined,
+              color: pendingNeighborhoodOrdersCount > 0 ? '#F59E0B' : undefined,
+              fontWeight: pendingNeighborhoodOrdersCount > 0 ? 700 : 500
+            }}
+            title="Identificar bairros cadastrados com nomes parecidos e corrigir pendências automaticamente"
+          >
+            <Wand2 size={15} />
+            <span>{isAutoResolving ? 'Corrigindo Bairros...' : `Corrigir Bairros Parecidos ${pendingNeighborhoodOrdersCount > 0 ? `(${pendingNeighborhoodOrdersCount})` : ''}`}</span>
+          </button>
+
+          <button
+            type="button"
             className="btn btn-primary"
             onClick={() => setShowCreateModal(true)}
             style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}
@@ -265,6 +319,65 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
           <div className="kpi-subtitle">Margem sobre o bruto</div>
         </div>
       </div>
+
+      {/* Alert Banner for pending neighborhood issues */}
+      {pendingNeighborhoodOrdersCount > 0 && (
+        <div style={{
+          backgroundColor: 'rgba(245, 158, 11, 0.12)',
+          border: '1px solid rgba(245, 158, 11, 0.35)',
+          borderRadius: '10px',
+          padding: '14px 18px',
+          marginBottom: '20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '38px',
+              height: '38px',
+              borderRadius: '8px',
+              backgroundColor: 'rgba(245, 158, 11, 0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#F59E0B'
+            }}>
+              <AlertTriangle size={20} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, color: '#FBBF24', fontSize: '0.95rem' }}>
+                {pendingNeighborhoodOrdersCount} {pendingNeighborhoodOrdersCount === 1 ? 'pedido com pendência operacional de bairro' : 'pedidos com pendências operacionais de bairros'}
+              </div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Existem pedidos com bairros cadastrados mas que vieram com nomes parecidos ou pequenas variações (sem acento, algarismos romanos, prefixos ou logradouros).
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={handleAutoResolveNeighborhoods}
+            disabled={isAutoResolving}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              backgroundColor: '#F59E0B',
+              borderColor: '#F59E0B',
+              fontWeight: 700,
+              padding: '8px 16px',
+              color: '#0F172A'
+            }}
+          >
+            <Wand2 size={15} />
+            <span>{isAutoResolving ? 'Corrigindo Bairros...' : 'Corrigir Todos Automaticamente'}</span>
+          </button>
+        </div>
+      )}
 
       {/* Filters Bar */}
       <div className="card" style={{ padding: '16px', marginBottom: '20px' }}>

@@ -174,6 +174,7 @@ export interface CourierDailyPayment {
   paid_at?: string;
   paid_by?: string;
   notes?: string;
+  retained_cash?: number;
   created_at?: string;
   updated_at?: string;
 }

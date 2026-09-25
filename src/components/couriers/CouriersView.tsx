@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { Courier, Delivery, Order, NeighborhoodRate, SystemSettings, DateRange, CourierDailyPayment } from '../../types';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
-import { isDateInRange, getOperationalDateKey } from '../../lib/dateUtils';
+import { isDateInRange, getOperationalDateKey, getLocalDateKey, formatDateBR } from '../../lib/dateUtils';
 import { supabase } from '../../lib/supabase';
 import { calculateDeliveryRates } from '../../lib/calculations';
 import { normalizeNeighborhoodName } from '../../lib/neighborhoodMatcher';
@@ -31,6 +31,7 @@ import { syncNeighborhoodRateToOrders } from '../../lib/neighborhoodSync';
 import { DateRangePicker } from '../common/DateRangePicker';
 import { DeliveryCreateModal } from './DeliveryCreateModal';
 import { CourierPaymentModal } from './CourierPaymentModal';
+import { ReconciliationDetailModal, ReconciliationModalType, ReconciliationItem } from './ReconciliationDetailModal';
 
 interface CouriersViewProps {
   couriers: Courier[];
@@ -72,6 +73,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   const [updateOfficialRate, setUpdateOfficialRate] = useState<boolean>(true);
   const [deletingDelivery, setDeletingDelivery] = useState<Delivery | null>(null);
   const [isDeletingDelivery, setIsDeletingDelivery] = useState<boolean>(false);
+  const [reconciliationModalType, setReconciliationModalType] = useState<ReconciliationModalType | null>(null);
 
   // Daily Settlement / Payments state (Section 16)
   const [dailyPayments, setDailyPayments] = useState<CourierDailyPayment[]>([]);
@@ -81,10 +83,15 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
     dateStr: string;
     dayDeliveries: Delivery[];
     existingPayment?: CourierDailyPayment | null;
+    initialRetainedCash?: number;
   } | null>(null);
   const [settlementFilter, setSettlementFilter] = useState<'all' | 'pending' | 'paid'>('all');
   const [settlementViewMode, setSettlementViewMode] = useState<'table' | 'cards'>('table');
   const [settlementCollapsed, setSettlementCollapsed] = useState<boolean>(false);
+
+  // Retained cash input overrides state: keyed by `${dateStr}__${courierName.toLowerCase()}`
+  const [retainedCashInputs, setRetainedCashInputs] = useState<Record<string, string>>({});
+  const [retainedCashOverrides, setRetainedCashOverrides] = useState<Record<string, number>>({});
 
   // Fetch registered courier payments from database
   const fetchDailyPayments = async () => {
@@ -100,6 +107,136 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
     } catch (err) {
       console.error('Falha ao consultar courier_daily_payments:', err);
     }
+  };
+
+  const saveRetainedCashToDb = async (item: {
+    dateStr: string;
+    courierName: string;
+    courier?: Courier | null;
+    totalDeliveries: number;
+    baseTotal: number;
+    additionalsTotal: number;
+    payment?: CourierDailyPayment | null;
+  }, newValue: number) => {
+    try {
+      const isDaniel = item.courierName.toLowerCase().includes('daniel');
+      if (!isDaniel) return;
+
+      const gross = item.baseTotal + item.additionalsTotal;
+      const netTotal = gross - newValue;
+
+      const payload: any = {
+        courier_id: item.courier?.id || null,
+        courier_name: item.courierName,
+        payment_date: item.dateStr,
+        delivery_count: item.totalDeliveries,
+        total_deliveries: item.totalDeliveries,
+        base_total: item.baseTotal,
+        base_amount: item.baseTotal,
+        additional_total: item.additionalsTotal,
+        additional_amount: item.additionalsTotal,
+        retained_cash: newValue,
+        total_amount: netTotal,
+        updated_at: new Date().toISOString()
+      };
+
+      if (item.payment) {
+        payload.id = item.payment.id;
+        payload.payment_method = item.payment.payment_method || 'Pix';
+        payload.is_paid = item.payment.is_paid || false;
+        payload.paid_amount = item.payment.paid_amount ?? (netTotal > 0 ? netTotal : 0);
+        payload.total_paid = item.payment.total_paid ?? (netTotal > 0 ? netTotal : 0);
+        payload.notes = item.payment.notes || '';
+      } else {
+        payload.payment_method = 'Pix';
+        payload.is_paid = false;
+        payload.paid_amount = netTotal > 0 ? netTotal : 0;
+        payload.total_paid = netTotal > 0 ? netTotal : 0;
+        payload.notes = '';
+      }
+
+      const { data, error } = await supabase
+        .from('courier_daily_payments')
+        .upsert(payload, { onConflict: 'courier_name,payment_date' })
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        console.error('Erro ao salvar dinheiro retido no banco:', error);
+      } else if (data) {
+        setDailyPayments(prev => {
+          const idx = prev.findIndex(
+            p => p.payment_date?.slice(0, 10) === item.dateStr && p.courier_name.toLowerCase() === item.courierName.toLowerCase()
+          );
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = { ...copy[idx], ...data };
+            return copy;
+          }
+          return [...prev, data];
+        });
+      }
+    } catch (err) {
+      console.error('Falha ao salvar dinheiro retido:', err);
+    }
+  };
+
+  const handleRetainedCashChange = (item: any, valStr: string) => {
+    const key = `${item.dateStr}__${item.courierName.toLowerCase()}`;
+    setRetainedCashInputs(prev => ({ ...prev, [key]: valStr }));
+    const num = parseFloat(valStr) || 0;
+    setRetainedCashOverrides(prev => ({ ...prev, [key]: num }));
+  };
+
+  const handleRetainedCashBlur = (item: any) => {
+    const key = `${item.dateStr}__${item.courierName.toLowerCase()}`;
+    const num = retainedCashOverrides[key] !== undefined ? retainedCashOverrides[key] : item.retainedCash;
+    saveRetainedCashToDb(item, num);
+  };
+
+  const handleResetToOrdersCash = (item: any) => {
+    const key = `${item.dateStr}__${item.courierName.toLowerCase()}`;
+    const ordersVal = item.ordersCashTotal || 0;
+    setRetainedCashInputs(prev => ({ ...prev, [key]: String(ordersVal) }));
+    setRetainedCashOverrides(prev => ({ ...prev, [key]: ordersVal }));
+    saveRetainedCashToDb(item, ordersVal);
+  };
+
+  // Multi-day selection state for automatic summation
+  const [selectedSettlementKeys, setSelectedSettlementKeys] = useState<Set<string>>(new Set());
+
+  const toggleSelectSettlement = (key: string) => {
+    setSelectedSettlementKeys(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAllSettlements = () => {
+    if (selectedSettlementKeys.size === displayedSettlements.length && displayedSettlements.length > 0) {
+      setSelectedSettlementKeys(new Set());
+    } else {
+      const allKeys = new Set(displayedSettlements.map(s => `${s.dateStr}_${s.courierName.toLowerCase()}`));
+      setSelectedSettlementKeys(allKeys);
+    }
+  };
+
+  const selectOnlyPendingSettlements = () => {
+    const pendingKeys = new Set(
+      displayedSettlements
+        .filter(s => !s.isPaid)
+        .map(s => `${s.dateStr}_${s.courierName.toLowerCase()}`)
+    );
+    setSelectedSettlementKeys(pendingKeys);
+  };
+
+  const clearSelectedSettlements = () => {
+    setSelectedSettlementKeys(new Set());
   };
 
   useEffect(() => {
@@ -126,10 +263,13 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
     }
   };
 
-  // Pre-index orders by external_order_id for fast lookup
+  // Pre-index orders by external_order_id and order_number for fast lookup
   const ordersMap = useMemo(() => {
     const map = new Map<string, Order>();
-    orders.forEach((o) => map.set(o.external_order_id, o));
+    orders.forEach((o) => {
+      if (o.external_order_id) map.set(o.external_order_id, o);
+      if (o.order_number) map.set(o.order_number, o);
+    });
     return map;
   }, [orders]);
 
@@ -169,7 +309,12 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       totalDeliveries: number;
       baseTotal: number;
       additionalsTotal: number;
+      grossTotal: number;
+      ordersCashTotal: number;
+      retainedCash: number;
+      retainedCashInputVal: string;
       totalToPay: number;
+      isDaniel: boolean;
       payment?: CourierDailyPayment | null;
       isPaid: boolean;
     }>();
@@ -194,7 +339,12 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
           totalDeliveries: 0,
           baseTotal: 0,
           additionalsTotal: 0,
+          grossTotal: 0,
+          ordersCashTotal: 0,
+          retainedCash: 0,
+          retainedCashInputVal: '0',
           totalToPay: 0,
+          isDaniel: d.courier_name.toLowerCase().includes('daniel'),
           payment,
           isPaid: Boolean(payment && payment.is_paid)
         });
@@ -205,13 +355,45 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       item.totalDeliveries++;
       item.baseTotal += Number(d.base_rate) || 8.00;
       item.additionalsTotal += Number(d.additional_rate) || 0;
-      item.totalToPay += Number(d.courier_fee) || (Number(d.base_rate) || 8.00) + (Number(d.additional_rate) || 0);
+    });
+
+    // Compute cash breakdown, discount and total for each item
+    map.forEach((item, key) => {
+      const isDaniel = item.isDaniel;
+
+      let ordersCashTotal = 0;
+      item.deliveries.forEach((d) => {
+        const order = ordersMap.get(d.external_order_id);
+        const payMethod = (order?.final_payment_method || order?.original_payment_method || d.payment_method || '').toLowerCase();
+        if (payMethod.includes('dinheiro') || payMethod === 'cash') {
+          ordersCashTotal += Number(order?.gross_amount ?? d.order_amount ?? 0);
+        }
+      });
+
+      const grossTotal = item.baseTotal + item.additionalsTotal;
+      item.grossTotal = grossTotal;
+      item.ordersCashTotal = ordersCashTotal;
+
+      let effectiveRetained = 0;
+      if (isDaniel) {
+        if (retainedCashOverrides[key] !== undefined) {
+          effectiveRetained = retainedCashOverrides[key];
+        } else if (item.payment?.retained_cash !== undefined && item.payment?.retained_cash !== null) {
+          effectiveRetained = Number(item.payment.retained_cash);
+        } else {
+          effectiveRetained = ordersCashTotal;
+        }
+      }
+
+      item.retainedCash = effectiveRetained;
+      item.retainedCashInputVal = retainedCashInputs[key] ?? (effectiveRetained > 0 ? String(effectiveRetained) : '0');
+      item.totalToPay = isDaniel ? (grossTotal - effectiveRetained) : grossTotal;
     });
 
     return Array.from(map.values()).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
-  }, [filteredDeliveries, couriers, dailyPayments]);
+  }, [filteredDeliveries, couriers, dailyPayments, ordersMap, retainedCashOverrides, retainedCashInputs]);
 
-  // Totals for the Couriers Module - com dedução dos pagamentos já efetuados
+  // Totals for the Couriers Module - com dedução dos pagamentos já efetuados e desconto do Daniel
   const courierStats = useMemo(() => {
     const totalDeliveries = filteredDeliveries.length;
     const baseTotal = filteredDeliveries.reduce((acc, d) => acc + Number(d.base_rate || 8.00), 0);
@@ -228,7 +410,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         totalPaid += Number(item.payment?.paid_amount) || Number(item.payment?.total_paid) || item.totalToPay;
         paidDeliveriesCount += item.totalDeliveries;
       } else {
-        pendingToPay += item.totalToPay;
+        pendingToPay += Math.max(0, item.totalToPay);
         pendingDeliveriesCount += item.totalDeliveries;
       }
     });
@@ -264,6 +446,49 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
     return dailySettlements;
   }, [dailySettlements, settlementFilter]);
 
+  // Automatic summation calculation for multi-day selection
+  const selectedSettlementsSummary = useMemo(() => {
+    if (selectedSettlementKeys.size === 0) return null;
+
+    const selectedItems = displayedSettlements.filter((item) =>
+      selectedSettlementKeys.has(`${item.dateStr}_${item.courierName.toLowerCase()}`)
+    );
+
+    if (selectedItems.length === 0) return null;
+
+    let totalDeliveries = 0;
+    let baseTotal = 0;
+    let additionalsTotal = 0;
+    let grossTotal = 0;
+    let retainedCashTotal = 0;
+    let totalToPay = 0;
+    let paidCount = 0;
+    let pendingCount = 0;
+
+    selectedItems.forEach((item) => {
+      totalDeliveries += item.totalDeliveries;
+      baseTotal += item.baseTotal;
+      additionalsTotal += item.additionalsTotal;
+      grossTotal += item.grossTotal;
+      retainedCashTotal += item.retainedCash || 0;
+      totalToPay += item.totalToPay;
+      if (item.isPaid) paidCount++;
+      else pendingCount++;
+    });
+
+    return {
+      count: selectedItems.length,
+      totalDeliveries,
+      baseTotal,
+      additionalsTotal,
+      grossTotal,
+      retainedCashTotal,
+      totalToPay,
+      paidCount,
+      pendingCount
+    };
+  }, [displayedSettlements, selectedSettlementKeys]);
+
   // Reconciliation Cash / Card breakdown (Section 15)
   // Cross deliveries with orders to find what was paid directly in physical money or POS card machine
   const reconciliation = useMemo(() => {
@@ -276,39 +501,69 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
     let creditCount = 0;
     let creditTotal = 0;
 
-    filteredDeliveries.forEach((d) => {
-      const order = ordersMap.get(d.external_order_id);
-      if (!order) return;
+    const cashItems: ReconciliationItem[] = [];
+    const debitItems: ReconciliationItem[] = [];
+    const creditItems: ReconciliationItem[] = [];
 
-      const payMethod = (order.final_payment_method || order.original_payment_method || '').toLowerCase();
-      const amount = Number(order.gross_amount || d.order_amount || 0);
+    filteredDeliveries.forEach((d) => {
+      const order = ordersMap.get(d.external_order_id) || (d.order_number ? ordersMap.get(d.order_number) : undefined);
+
+      const rawPayMethod = order?.final_payment_method || order?.original_payment_method || d.payment_method || '';
+      const payMethod = rawPayMethod.toLowerCase();
+      const amount = Number(order?.gross_amount ?? d.order_amount ?? 0);
+
+      const item: ReconciliationItem = {
+        id: d.id,
+        orderNumber: order?.order_number || d.order_number || d.external_order_id,
+        externalOrderId: d.external_order_id,
+        customerName: order?.customer_name || 'Cliente Balcão / Avulso',
+        customerPhone: order?.customer_phone || (order?.original_imported_data?.Telefone) || undefined,
+        neighborhood: d.neighborhood_name || order?.neighborhood_name || 'Bairro a definir',
+        courierName: d.courier_name,
+        deliveryDate: d.delivery_date,
+        amount,
+        paymentMethod: rawPayMethod || 'Não informado',
+        channel: order?.channel || (d.external_order_id?.startsWith('RET') ? 'Retorno' : 'Manual'),
+        notes: order?.notes || d.notes || undefined,
+        changeFor: Number(order?.original_imported_data?.['Troco para']) || undefined,
+        order: order || null,
+        delivery: d
+      };
 
       // Check physical cash
-      if (payMethod === 'dinheiro') {
+      if (payMethod.includes('dinheiro') || payMethod === 'cash') {
         cashCount++;
         cashTotal += amount;
+        cashItems.push(item);
       } else if (payMethod.includes('débito') || payMethod.includes('debito')) {
         debitCount++;
         debitTotal += amount;
+        debitItems.push(item);
       } else if (payMethod.includes('crédito') || payMethod.includes('credito')) {
         creditCount++;
         creditTotal += amount;
+        creditItems.push(item);
       }
     });
 
     const cardCount = debitCount + creditCount;
     const cardTotal = debitTotal + creditTotal;
+    const cardItems: ReconciliationItem[] = [...debitItems, ...creditItems];
     const totalReceivedInHand = cashTotal + cardTotal;
 
     return {
       cashCount,
       cashTotal,
+      cashItems,
       debitCount,
       debitTotal,
+      debitItems,
       creditCount,
       creditTotal,
+      creditItems,
       cardCount,
       cardTotal,
+      cardItems,
       totalReceivedInHand
     };
   }, [filteredDeliveries, ordersMap]);
@@ -585,9 +840,33 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginBottom: '14px' }}>
             {/* Dinheiro */}
-            <div style={{ backgroundColor: 'var(--bg-input)', padding: '10px 12px', borderRadius: '8px' }}>
-              <div style={{ fontSize: '0.72rem', color: '#34D399', fontWeight: 600 }}>DINHEIRO</div>
-              <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '2px' }}>
+            <div 
+              onClick={() => setReconciliationModalType('cash')}
+              role="button"
+              tabIndex={0}
+              style={{ 
+                backgroundColor: 'var(--bg-input)', 
+                padding: '10px 12px', 
+                borderRadius: '8px',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                border: '1px solid rgba(52, 211, 153, 0.2)'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = '#34D399';
+                e.currentTarget.style.backgroundColor = 'rgba(52, 211, 153, 0.12)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'rgba(52, 211, 153, 0.2)';
+                e.currentTarget.style.backgroundColor = 'var(--bg-input)';
+              }}
+              title="Clique para abrir a lista detalhada de pedidos em dinheiro deste período"
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontSize: '0.72rem', color: '#34D399', fontWeight: 700 }}>DINHEIRO</div>
+                <span style={{ fontSize: '0.65rem', color: '#34D399', opacity: 0.9 }}>Ver pedidos ↗</span>
+              </div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 800, marginTop: '2px', color: '#F8FAFC' }}>
                 {formatCurrency(reconciliation.cashTotal)}
               </div>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
@@ -596,9 +875,33 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             </div>
 
             {/* Débito */}
-            <div style={{ backgroundColor: 'var(--bg-input)', padding: '10px 12px', borderRadius: '8px' }}>
-              <div style={{ fontSize: '0.72rem', color: '#38BDF8', fontWeight: 600 }}>DÉBITO</div>
-              <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '2px' }}>
+            <div 
+              onClick={() => setReconciliationModalType('debit')}
+              role="button"
+              tabIndex={0}
+              style={{ 
+                backgroundColor: 'var(--bg-input)', 
+                padding: '10px 12px', 
+                borderRadius: '8px',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                border: '1px solid rgba(56, 189, 248, 0.2)'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = '#38BDF8';
+                e.currentTarget.style.backgroundColor = 'rgba(56, 189, 248, 0.12)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.2)';
+                e.currentTarget.style.backgroundColor = 'var(--bg-input)';
+              }}
+              title="Clique para abrir a lista detalhada de pedidos em débito deste período"
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontSize: '0.72rem', color: '#38BDF8', fontWeight: 700 }}>DÉBITO</div>
+                <span style={{ fontSize: '0.65rem', color: '#38BDF8', opacity: 0.9 }}>Ver pedidos ↗</span>
+              </div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 800, marginTop: '2px', color: '#F8FAFC' }}>
                 {formatCurrency(reconciliation.debitTotal)}
               </div>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
@@ -607,9 +910,33 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             </div>
 
             {/* Crédito */}
-            <div style={{ backgroundColor: 'var(--bg-input)', padding: '10px 12px', borderRadius: '8px' }}>
-              <div style={{ fontSize: '0.72rem', color: '#A855F7', fontWeight: 600 }}>CRÉDITO</div>
-              <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '2px' }}>
+            <div 
+              onClick={() => setReconciliationModalType('credit')}
+              role="button"
+              tabIndex={0}
+              style={{ 
+                backgroundColor: 'var(--bg-input)', 
+                padding: '10px 12px', 
+                borderRadius: '8px',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                border: '1px solid rgba(168, 85, 247, 0.2)'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = '#A855F7';
+                e.currentTarget.style.backgroundColor = 'rgba(168, 85, 247, 0.12)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'rgba(168, 85, 247, 0.2)';
+                e.currentTarget.style.backgroundColor = 'var(--bg-input)';
+              }}
+              title="Clique para abrir a lista detalhada de pedidos em crédito deste período"
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ fontSize: '0.72rem', color: '#A855F7', fontWeight: 700 }}>CRÉDITO</div>
+                <span style={{ fontSize: '0.65rem', color: '#A855F7', opacity: 0.9 }}>Ver pedidos ↗</span>
+              </div>
+              <div style={{ fontSize: '1.15rem', fontWeight: 800, marginTop: '2px', color: '#F8FAFC' }}>
                 {formatCurrency(reconciliation.creditTotal)}
               </div>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
@@ -618,24 +945,41 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             </div>
           </div>
 
-          <div style={{
-            backgroundColor: 'rgba(245, 158, 11, 0.1)',
-            border: '1px solid rgba(245, 158, 11, 0.3)',
-            borderRadius: '10px',
-            padding: '12px 14px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between'
-          }}>
+          <div 
+            onClick={() => setReconciliationModalType('card')}
+            role="button"
+            tabIndex={0}
+            style={{
+              backgroundColor: 'rgba(245, 158, 11, 0.1)',
+              border: '1px solid rgba(245, 158, 11, 0.3)',
+              borderRadius: '10px',
+              padding: '12px 14px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = '#F59E0B';
+              e.currentTarget.style.backgroundColor = 'rgba(245, 158, 11, 0.18)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'rgba(245, 158, 11, 0.3)';
+              e.currentTarget.style.backgroundColor = 'rgba(245, 158, 11, 0.1)';
+            }}
+            title="Clique para abrir a lista de todos os pedidos em cartão na maquininha (débito + crédito)"
+          >
             <div>
-              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#FBBF24' }}>
-                TOTAL CARTÃO (Débito + Crédito):
+              <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#FBBF24', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>TOTAL CARTÃO (Débito + Crédito):</span>
+                <span style={{ fontSize: '0.68rem', opacity: 0.9 }}>Ver lista completa ↗</span>
               </div>
               <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                 {reconciliation.cardCount} pedidos na maquininha
               </span>
             </div>
-            <div style={{ fontSize: '1.35rem', fontWeight: 700, color: '#FBBF24' }}>
+            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#FBBF24' }}>
               {formatCurrency(reconciliation.cardTotal)}
             </div>
           </div>
@@ -767,6 +1111,43 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
               </button>
             </div>
 
+            {/* Quick Multi-select Toolbar */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <button
+                type="button"
+                onClick={toggleSelectAllSettlements}
+                className="btn btn-secondary btn-sm"
+                style={{ fontSize: '0.74rem', padding: '4px 8px' }}
+                title="Selecionar ou desmarcar todos os dias da listagem"
+              >
+                {selectedSettlementKeys.size === displayedSettlements.length && displayedSettlements.length > 0
+                  ? 'Desmarcar Todos'
+                  : 'Selecionar Todos'}
+              </button>
+              {pendingSettlementsCount > 0 && (
+                <button
+                  type="button"
+                  onClick={selectOnlyPendingSettlements}
+                  className="btn btn-secondary btn-sm"
+                  style={{ fontSize: '0.74rem', padding: '4px 8px', color: '#FBBF24', borderColor: 'rgba(251, 191, 36, 0.3)' }}
+                  title="Selecionar todos os dias pendentes de pagamento"
+                >
+                  Pendentes ({pendingSettlementsCount})
+                </button>
+              )}
+              {selectedSettlementKeys.size > 0 && (
+                <button
+                  type="button"
+                  onClick={clearSelectedSettlements}
+                  className="btn btn-secondary btn-sm"
+                  style={{ fontSize: '0.74rem', padding: '4px 8px', color: '#F43F5E', borderColor: 'rgba(244, 63, 94, 0.3)' }}
+                  title="Limpar seleção"
+                >
+                  Limpar ({selectedSettlementKeys.size})
+                </button>
+              )}
+            </div>
+
             {/* Collapse / Expand Button */}
             <button
               type="button"
@@ -784,22 +1165,145 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         {/* When not collapsed: content */}
         {!settlementCollapsed && (
           <div>
+            {/* Somatória Automática dos Dias Selecionados */}
+            {selectedSettlementsSummary && (
+              <div style={{
+                backgroundColor: 'rgba(56, 189, 248, 0.08)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                borderRadius: '10px',
+                padding: '12px 16px',
+                marginBottom: '14px',
+                boxShadow: '0 4px 14px rgba(0, 0, 0, 0.25)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', marginBottom: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <span style={{
+                      backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                      color: '#38BDF8',
+                      borderRadius: '6px',
+                      padding: '3px 8px',
+                      fontSize: '0.75rem',
+                      fontWeight: 800,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}>
+                      <Check size={13} />
+                      {selectedSettlementsSummary.count} {selectedSettlementsSummary.count === 1 ? 'DIA SELECIONADO' : 'DIAS SELECIONADOS'}
+                    </span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#F8FAFC' }}>
+                      Somatória Automática dos Dias Selecionados:
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                      ({selectedSettlementsSummary.pendingCount} pendentes • {selectedSettlementsSummary.paidCount} pagos)
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={clearSelectedSettlements}
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '0.72rem', padding: '3px 8px' }}
+                  >
+                    Desmarcar Todos
+                  </button>
+                </div>
+
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: selectedSettlementsSummary.retainedCashTotal > 0 ? 'repeat(auto-fit, minmax(130px, 1fr))' : 'repeat(auto-fit, minmax(140px, 1fr))',
+                  gap: '8px',
+                  backgroundColor: 'var(--bg-card)',
+                  padding: '10px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-color)'
+                }}>
+                  <div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600 }}>CORRIDAS</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#F8FAFC', marginTop: '2px' }}>
+                      {selectedSettlementsSummary.totalDeliveries}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600 }}>BASE (R$ 8)</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#F8FAFC', marginTop: '2px' }}>
+                      {formatCurrency(selectedSettlementsSummary.baseTotal)}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600 }}>ADICIONAIS</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#FBBF24', marginTop: '2px' }}>
+                      +{formatCurrency(selectedSettlementsSummary.additionalsTotal)}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 600 }}>TOTAL DIÁRIA (BRUTO)</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#F8FAFC', marginTop: '2px' }}>
+                      {formatCurrency(selectedSettlementsSummary.grossTotal)}
+                    </div>
+                  </div>
+
+                  {selectedSettlementsSummary.retainedCashTotal > 0 && (
+                    <div>
+                      <div style={{ fontSize: '0.68rem', color: '#F43F5E', fontWeight: 600 }}>DINHEIRO RETIDO (DANIEL)</div>
+                      <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#F43F5E', marginTop: '2px' }}>
+                        -{formatCurrency(selectedSettlementsSummary.retainedCashTotal)}
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{
+                    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid rgba(56, 189, 248, 0.35)'
+                  }}>
+                    <div style={{ fontSize: '0.68rem', color: selectedSettlementsSummary.totalToPay < 0 ? '#F43F5E' : '#38BDF8', fontWeight: 700 }}>
+                      LÍQUIDO A PAGAR TOTAL
+                    </div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 900, color: selectedSettlementsSummary.totalToPay < 0 ? '#F43F5E' : '#38BDF8', marginTop: '2px' }}>
+                      {formatCurrency(selectedSettlementsSummary.totalToPay)}
+                    </div>
+                    {selectedSettlementsSummary.totalToPay < 0 && (
+                      <div style={{ fontSize: '0.65rem', color: '#F43F5E', fontWeight: 700 }}>
+                        Daniel deve devolver {formatCurrency(Math.abs(selectedSettlementsSummary.totalToPay))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {displayedSettlements.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)' }}>
                 Nenhum acerto de diária para o filtro selecionado ({settlementFilter === 'pending' ? 'sem pendências' : settlementFilter === 'paid' ? 'nenhum pago' : 'vazio'}).
               </div>
             ) : settlementViewMode === 'table' ? (
               /* Compact Table Mode */
-              <div style={{ overflowX: 'auto', maxHeight: '420px', overflowY: 'auto' }}>
+              <div style={{ overflowX: 'auto', maxHeight: '440px', overflowY: 'auto' }}>
                 <table className="data-table" style={{ fontSize: '0.82rem' }}>
                   <thead>
                     <tr>
+                      <th style={{ width: '38px', textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={displayedSettlements.length > 0 && selectedSettlementKeys.size === displayedSettlements.length}
+                          onChange={toggleSelectAllSettlements}
+                          title={selectedSettlementKeys.size === displayedSettlements.length ? 'Desmarcar todos' : 'Selecionar todos'}
+                          style={{ cursor: 'pointer', width: '15px', height: '15px' }}
+                        />
+                      </th>
                       <th>Data</th>
                       <th>Motoboy</th>
                       <th>Corridas</th>
                       <th>Base (R$ 8)</th>
                       <th>Adicionais</th>
-                      <th>Total Diária</th>
+                      <th>Total Diária (Bruto)</th>
+                      <th>Dinheiro c/ Motoboy</th>
+                      <th>Líquido a Pagar</th>
                       <th>Status</th>
                       <th>Forma Pgto</th>
                       <th style={{ textAlign: 'right' }}>Ação</th>
@@ -809,9 +1313,25 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                     {displayedSettlements.map((item) => {
                       const isPaid = item.isPaid;
                       const formattedDate = item.dateStr.split('-').reverse().join('/');
+                      const itemKey = `${item.dateStr}_${item.courierName.toLowerCase()}`;
+                      const isSelected = selectedSettlementKeys.has(itemKey);
 
                       return (
-                        <tr key={`${item.dateStr}_${item.courierName}`}>
+                        <tr
+                          key={`${item.dateStr}_${item.courierName}`}
+                          style={{
+                            backgroundColor: isSelected ? 'rgba(56, 189, 248, 0.08)' : undefined,
+                            transition: 'background-color 0.15s ease'
+                          }}
+                        >
+                          <td style={{ textAlign: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelectSettlement(itemKey)}
+                              style={{ cursor: 'pointer', width: '15px', height: '15px' }}
+                            />
+                          </td>
                           <td style={{ fontWeight: 700, color: '#F8FAFC' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                               <Calendar size={13} color="var(--text-muted)" />
@@ -828,9 +1348,99 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                           <td style={{ color: item.additionalsTotal > 0 ? '#FBBF24' : 'var(--text-muted)', fontWeight: 600 }}>
                             +{formatCurrency(item.additionalsTotal)}
                           </td>
-                          <td style={{ fontWeight: 800, color: isPaid ? '#34D399' : '#F8FAFC' }}>
-                            {formatCurrency(item.totalToPay)}
+
+                          {/* 1. Total Diária SEM desconto (Bruto: Base + Adicionais) */}
+                          <td style={{ fontWeight: 700, color: '#F8FAFC' }}>
+                            {formatCurrency(item.grossTotal)}
                           </td>
+
+                          {/* 2. Dinheiro Retido dos Pedidos (Exclusivo Daniel) */}
+                          <td>
+                            {item.isDaniel ? (
+                              <div style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <div style={{ position: 'relative', width: '96px' }}>
+                                    <span style={{
+                                      position: 'absolute',
+                                      left: '6px',
+                                      top: '50%',
+                                      transform: 'translateY(-50%)',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 700,
+                                      color: '#F43F5E',
+                                      pointerEvents: 'none'
+                                    }}>
+                                      -R$
+                                    </span>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      value={item.retainedCashInputVal}
+                                      onChange={(e) => handleRetainedCashChange(item, e.target.value)}
+                                      onBlur={() => handleRetainedCashBlur(item)}
+                                      title="Dinheiro dos pedidos retido com Daniel (descontado do total da diária)"
+                                      style={{
+                                        width: '100%',
+                                        padding: '3px 4px 3px 26px',
+                                        backgroundColor: 'var(--bg-input)',
+                                        border: '1px solid rgba(244, 63, 94, 0.45)',
+                                        borderRadius: '6px',
+                                        color: '#F43F5E',
+                                        fontSize: '0.8rem',
+                                        fontWeight: 700,
+                                        outline: 'none'
+                                      }}
+                                    />
+                                  </div>
+                                  {item.ordersCashTotal > 0 && item.retainedCash !== item.ordersCashTotal && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleResetToOrdersCash(item)}
+                                      title={`Restaurar valor dos pedidos em dinheiro deste dia: ${formatCurrency(item.ordersCashTotal)}`}
+                                      style={{
+                                        background: 'none',
+                                        border: 'none',
+                                        color: 'var(--text-muted)',
+                                        cursor: 'pointer',
+                                        padding: '2px',
+                                        display: 'flex',
+                                        alignItems: 'center'
+                                      }}
+                                    >
+                                      <RotateCcw size={12} />
+                                    </button>
+                                  )}
+                                </div>
+                                {item.ordersCashTotal > 0 && (
+                                  <span style={{ fontSize: '0.67rem', color: 'var(--text-muted)' }}>
+                                    pedidos: {formatCurrency(item.ordersCashTotal)}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }} title="Desconto de dinheiro retido exclusivo para o Daniel">—</span>
+                            )}
+                          </td>
+
+                          {/* 3. Total COM desconto (Líquido a pagar após abater o dinheiro em mãos) */}
+                          <td style={{ fontWeight: 800 }}>
+                            {item.isDaniel && item.retainedCash > 0 ? (
+                              <div>
+                                <span style={{ color: item.totalToPay < 0 ? '#F43F5E' : isPaid ? '#34D399' : '#38BDF8' }}>
+                                  {formatCurrency(item.totalToPay)}
+                                </span>
+                                <div style={{ fontSize: '0.68rem', color: item.totalToPay < 0 ? '#F43F5E' : '#FB7185', fontWeight: 600 }}>
+                                  {item.totalToPay < 0 ? `(devolver ${formatCurrency(Math.abs(item.totalToPay))})` : `(-${formatCurrency(item.retainedCash)})`}
+                                </div>
+                              </div>
+                            ) : (
+                              <span style={{ color: isPaid ? '#34D399' : '#38BDF8' }}>
+                                {formatCurrency(item.totalToPay)}
+                              </span>
+                            )}
+                          </td>
+
                           <td>
                             <span style={{
                               fontSize: '0.72rem',
@@ -859,7 +1469,8 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                                 courier: item.courier,
                                 dateStr: item.dateStr,
                                 dayDeliveries: item.deliveries,
-                                existingPayment: item.payment
+                                existingPayment: item.payment,
+                                initialRetainedCash: item.retainedCash
                               })}
                               className={isPaid ? "btn btn-secondary btn-sm" : "btn btn-primary btn-sm"}
                               style={isPaid ? { padding: '3px 8px', fontSize: '0.75rem' } : { backgroundColor: '#10B981', borderColor: '#10B981', padding: '3px 8px', fontSize: '0.75rem' }}
@@ -872,6 +1483,44 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                       );
                     })}
                   </tbody>
+                  <tfoot>
+                    <tr style={{ backgroundColor: 'rgba(0, 0, 0, 0.35)', borderTop: '2px solid var(--border-color)', fontWeight: 800 }}>
+                      <td colSpan={3} style={{ color: '#F8FAFC', padding: '10px 12px' }}>
+                        {selectedSettlementsSummary ? (
+                          <span style={{ color: '#38BDF8', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Check size={13} />
+                            SOMA SELECIONADA ({selectedSettlementsSummary.count} {selectedSettlementsSummary.count === 1 ? 'dia' : 'dias'}):
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)' }}>TOTAL VISÍVEL ({displayedSettlements.length} dias):</span>
+                        )}
+                      </td>
+                      <td>
+                        {selectedSettlementsSummary ? selectedSettlementsSummary.totalDeliveries : displayedSettlements.reduce((acc, s) => acc + s.totalDeliveries, 0)}
+                      </td>
+                      <td>
+                        {formatCurrency(selectedSettlementsSummary ? selectedSettlementsSummary.baseTotal : displayedSettlements.reduce((acc, s) => acc + s.baseTotal, 0))}
+                      </td>
+                      <td style={{ color: '#FBBF24' }}>
+                        +{formatCurrency(selectedSettlementsSummary ? selectedSettlementsSummary.additionalsTotal : displayedSettlements.reduce((acc, s) => acc + s.additionalsTotal, 0))}
+                      </td>
+                      <td style={{ color: '#F8FAFC' }}>
+                        {formatCurrency(selectedSettlementsSummary ? selectedSettlementsSummary.grossTotal : displayedSettlements.reduce((acc, s) => acc + s.grossTotal, 0))}
+                      </td>
+                      <td style={{ color: '#F43F5E' }}>
+                        {(() => {
+                          const ret = selectedSettlementsSummary
+                            ? selectedSettlementsSummary.retainedCashTotal
+                            : displayedSettlements.reduce((acc, s) => acc + (s.retainedCash || 0), 0);
+                          return ret > 0 ? `-${formatCurrency(ret)}` : '—';
+                        })()}
+                      </td>
+                      <td style={{ color: '#38BDF8', fontSize: '0.95rem' }}>
+                        {formatCurrency(selectedSettlementsSummary ? selectedSettlementsSummary.totalToPay : displayedSettlements.reduce((acc, s) => acc + s.totalToPay, 0))}
+                      </td>
+                      <td colSpan={3}></td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             ) : (
@@ -880,29 +1529,44 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                 {displayedSettlements.map((item) => {
                   const isPaid = item.isPaid;
                   const formattedDate = item.dateStr.split('-').reverse().join('/');
+                  const itemKey = `${item.dateStr}_${item.courierName.toLowerCase()}`;
+                  const isSelected = selectedSettlementKeys.has(itemKey);
 
                   return (
                     <div
                       key={`${item.dateStr}_${item.courierName}`}
                       style={{
-                        backgroundColor: 'var(--bg-input)',
-                        border: isPaid ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(251, 191, 36, 0.4)',
+                        backgroundColor: isSelected ? 'rgba(56, 189, 248, 0.08)' : 'var(--bg-input)',
+                        border: isSelected
+                          ? '1px solid #38BDF8'
+                          : isPaid
+                          ? '1px solid rgba(16, 185, 129, 0.4)'
+                          : '1px solid rgba(251, 191, 36, 0.4)',
                         borderRadius: '10px',
                         padding: '14px 16px',
                         display: 'flex',
                         flexDirection: 'column',
                         justifyContent: 'space-between',
-                        gap: '12px'
+                        gap: '12px',
+                        transition: 'all 0.15s ease'
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                        <div>
-                          <div style={{ fontSize: '1rem', fontWeight: 700, color: '#F8FAFC' }}>
-                            {item.courierName}
-                          </div>
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
-                            <Calendar size={13} />
-                            <span>Data da Diária: <strong>{formattedDate}</strong></span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectSettlement(itemKey)}
+                            style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                          />
+                          <div>
+                            <div style={{ fontSize: '1rem', fontWeight: 700, color: '#F8FAFC' }}>
+                              {item.courierName}
+                            </div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
+                              <Calendar size={13} />
+                              <span>Data da Diária: <strong>{formattedDate}</strong></span>
+                            </div>
                           </div>
                         </div>
 
@@ -925,7 +1589,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
                       <div style={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(3, 1fr)',
+                        gridTemplateColumns: 'repeat(4, 1fr)',
                         gap: '8px',
                         backgroundColor: 'rgba(0, 0, 0, 0.2)',
                         padding: '8px 10px',
@@ -944,16 +1608,41 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                           <div style={{ color: 'var(--text-muted)' }}>Adicionais</div>
                           <div style={{ fontWeight: 600, color: '#FBBF24' }}>+{formatCurrency(item.additionalsTotal)}</div>
                         </div>
+                        <div>
+                          <div style={{ color: 'var(--text-muted)' }}>Total Diária</div>
+                          <div style={{ fontWeight: 700, color: '#F8FAFC' }}>{formatCurrency(item.grossTotal)}</div>
+                        </div>
                       </div>
+
+                      {item.isDaniel && (
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          backgroundColor: 'rgba(244, 63, 94, 0.08)',
+                          border: '1px solid rgba(244, 63, 94, 0.25)',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          fontSize: '0.75rem'
+                        }}>
+                          <span style={{ color: '#F43F5E', fontWeight: 600 }}>💵 Dinheiro retido c/ Daniel:</span>
+                          <span style={{ fontWeight: 700, color: '#F43F5E' }}>-{formatCurrency(item.retainedCash)}</span>
+                        </div>
+                      )}
 
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '4px' }}>
                         <div>
                           <div style={{ fontSize: '0.7rem', color: isPaid ? '#34D399' : 'var(--text-muted)' }}>
-                            {isPaid ? `Pago via ${item.payment?.payment_method || 'Pix'}` : 'VALOR DA DIÁRIA:'}
+                            {isPaid ? `Pago via ${item.payment?.payment_method || 'Pix'}` : (item.isDaniel ? 'LÍQUIDO A PAGAR (COM DESCONTO):' : 'VALOR DA DIÁRIA:')}
                           </div>
-                          <div style={{ fontSize: '1.25rem', fontWeight: 800, color: isPaid ? '#34D399' : '#F8FAFC' }}>
+                          <div style={{ fontSize: '1.25rem', fontWeight: 800, color: item.totalToPay < 0 ? '#F43F5E' : isPaid ? '#34D399' : '#38BDF8' }}>
                             {formatCurrency(item.totalToPay)}
                           </div>
+                          {item.isDaniel && item.retainedCash > 0 && (
+                            <div style={{ fontSize: '0.7rem', color: item.totalToPay < 0 ? '#F43F5E' : '#FB7185', fontWeight: 600 }}>
+                              {item.totalToPay < 0 ? `Daniel deve devolver ${formatCurrency(Math.abs(item.totalToPay))}` : `Bruto ${formatCurrency(item.grossTotal)} - Retido ${formatCurrency(item.retainedCash)}`}
+                            </div>
+                          )}
                         </div>
 
                         <button
@@ -963,7 +1652,8 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                             courier: item.courier,
                             dateStr: item.dateStr,
                             dayDeliveries: item.deliveries,
-                            existingPayment: item.payment
+                            existingPayment: item.payment,
+                            initialRetainedCash: item.retainedCash
                           })}
                           className={isPaid ? "btn btn-secondary btn-sm" : "btn btn-primary btn-sm"}
                           style={isPaid ? {} : { backgroundColor: '#10B981', borderColor: '#10B981' }}
@@ -1437,6 +2127,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         neighborhoodRates={neighborhoodRates}
         settings={settings}
         defaultCourierName={selectedCourierName !== 'all' ? selectedCourierName : undefined}
+        defaultDate={dateRange ? getLocalDateKey(dateRange.startDate) : undefined}
       />
 
       {/* Daily Courier Payment / Settlement Modal */}
@@ -1454,6 +2145,32 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
           dateStr={paymentModalData.dateStr}
           dayDeliveries={paymentModalData.dayDeliveries}
           existingPayment={paymentModalData.existingPayment}
+          initialRetainedCash={paymentModalData.initialRetainedCash}
+          ordersMap={ordersMap}
+        />
+      )}
+
+      {/* Reconciliation Detail Modal (Dinheiro / Débito / Crédito / Maquininha) */}
+      {reconciliationModalType && (
+        <ReconciliationDetailModal
+          isOpen={true}
+          onClose={() => setReconciliationModalType(null)}
+          type={reconciliationModalType}
+          items={
+            reconciliationModalType === 'cash'
+              ? reconciliation.cashItems
+              : reconciliationModalType === 'debit'
+              ? reconciliation.debitItems
+              : reconciliationModalType === 'credit'
+              ? reconciliation.creditItems
+              : reconciliation.cardItems
+          }
+          currentDateRangeLabel={
+            dateRange
+              ? `${formatDateBR(dateRange.startDate)}${dateRange.startDate.toDateString() !== dateRange.endDate.toDateString() ? ` até ${formatDateBR(dateRange.endDate)}` : ''}`
+              : `${selectedMonth.toString().padStart(2, '0')}/${selectedYear}`
+          }
+          selectedCourierName={selectedCourierName}
         />
       )}
     </div>
