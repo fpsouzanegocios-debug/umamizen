@@ -10,6 +10,7 @@ import { DateRange } from '../../types';
 import { 
   getPresetOptions, 
   getCalendarMonthMatrix, 
+  MONTH_NAMES_PT,
   MONTH_NAMES_SHORT_PT, 
   WEEKDAYS_SHORT_PT,
   formatDateBR,
@@ -28,8 +29,23 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChang
   const containerRef = useRef<HTMLDivElement>(null);
   const [computedAlign, setComputedAlign] = useState<'left' | 'right'>(align === 'right' ? 'right' : 'left');
 
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 768;
+    }
+    return false;
+  });
+
   useEffect(() => {
-    if (isOpen) {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (isOpen && !isMobile) {
       if (align === 'right') {
         setComputedAlign('right');
       } else if (align === 'left') {
@@ -43,7 +59,7 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChang
         }
       }
     }
-  }, [isOpen, align]);
+  }, [isOpen, align, isMobile]);
 
   // Presets always computed from the real current clock time
   const presets = useMemo(() => getPresetOptions(new Date()), []);
@@ -78,9 +94,10 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChang
     }
   }, [value]);
 
-  // Click outside to close
+  // Click outside to close (desktop only; mobile uses backdrop overlay)
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
+      if (isMobile) return;
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsOpen(false);
         setIsSelectingRange(false);
@@ -93,7 +110,7 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChang
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [isOpen]);
+  }, [isOpen, isMobile]);
 
   // Handle Preset Click
   const handleSelectPreset = (presetKey: string) => {
@@ -269,16 +286,307 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChang
           cursor: 'pointer',
           borderRadius: '8px',
           transition: 'all 0.2s ease',
-          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)'
+          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
+          maxWidth: '100%'
         }}
       >
-        <CalendarIcon size={16} color="#3B82F6" />
-        <span style={{ fontWeight: 600 }}>{value.label || `${formatDateBR(value.startDate)} ~ ${formatDateBR(value.endDate)}`}</span>
-        <ChevronDown size={15} style={{ transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+        <CalendarIcon size={16} color="#3B82F6" style={{ flexShrink: 0 }} />
+        <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {value.label || `${formatDateBR(value.startDate)} ~ ${formatDateBR(value.endDate)}`}
+        </span>
+        <ChevronDown size={15} style={{ flexShrink: 0, transform: isOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
       </button>
 
-      {/* Floating Popover Picker Modal */}
-      {isOpen && (
+      {/* MOBILE MODAL DIALOG (Screens < 768px) */}
+      {isOpen && isMobile && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 99999,
+            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '12px',
+            animation: 'fadeIn 0.2s ease-out'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setIsOpen(false);
+            }
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#0F172A',
+              border: '1px solid #334155',
+              borderRadius: '16px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.8)',
+              width: '100%',
+              maxWidth: '380px',
+              maxHeight: '92vh',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden'
+            }}
+          >
+            {/* Mobile Header */}
+            <div
+              style={{
+                padding: '14px 16px',
+                borderBottom: '1px solid #1E293B',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                backgroundColor: '#090D16'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <CalendarIcon size={18} color="#38BDF8" />
+                <div>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#F8FAFC' }}>
+                    Selecionar Período
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: '#94A3B8', marginTop: '1px' }}>
+                    {rangeDisplayString}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: 'none',
+                  color: '#94A3B8',
+                  cursor: 'pointer',
+                  padding: '6px',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Mobile Horizontal Scrollable Presets */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '10px 14px',
+                backgroundColor: '#0B0F19',
+                borderBottom: '1px solid #1E293B',
+                overflowX: 'auto',
+                whiteSpace: 'nowrap',
+                WebkitOverflowScrolling: 'touch'
+              }}
+            >
+              {presets.map((p) => {
+                const isActive = activePreset === p.key;
+                return (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() => handleSelectPreset(p.key)}
+                    style={{
+                      flexShrink: 0,
+                      backgroundColor: isActive ? '#2563EB' : '#1E293B',
+                      color: isActive ? '#FFFFFF' : '#94A3B8',
+                      border: isActive ? '1px solid #3B82F6' : '1px solid rgba(255, 255, 255, 0.08)',
+                      borderRadius: '20px',
+                      padding: '5px 12px',
+                      fontSize: '0.78rem',
+                      fontWeight: isActive ? 700 : 500,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Mobile Single Month Calendar */}
+            <div style={{ padding: '14px', overflowY: 'auto', flex: 1 }}>
+              {/* Month Navigation */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: '12px'
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={handlePrevLeftMonth}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.06)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: '8px',
+                    color: '#E2E8F0',
+                    cursor: 'pointer',
+                    padding: '6px 10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Mês anterior"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+
+                <span
+                  style={{
+                    fontSize: '0.92rem',
+                    fontWeight: 700,
+                    color: '#F8FAFC',
+                    textTransform: 'capitalize'
+                  }}
+                >
+                  {MONTH_NAMES_PT[leftMonthDate.getMonth()]}, {leftMonthDate.getFullYear()}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={handleNextLeftMonth}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.06)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: '8px',
+                    color: '#E2E8F0',
+                    cursor: 'pointer',
+                    padding: '6px 10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Próximo mês"
+                >
+                  <ChevronRight size={18} />
+                </button>
+              </div>
+
+              {/* Weekday headers */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(7, 1fr)',
+                  gap: '2px',
+                  marginBottom: '8px',
+                  textAlign: 'center'
+                }}
+              >
+                {WEEKDAYS_SHORT_PT.map((w, i) => (
+                  <span
+                    key={i}
+                    style={{
+                      fontSize: '0.75rem',
+                      fontWeight: 700,
+                      color: '#64748B'
+                    }}
+                  >
+                    {w}
+                  </span>
+                ))}
+              </div>
+
+              {/* Days Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '3px' }}>
+                {leftDays.map((cell) => {
+                  const selectedStart = isStartDay(cell.date);
+                  const selectedEnd = isEndDay(cell.date);
+                  const selectedMiddle = isInRange(cell.date) && !selectedStart && !selectedEnd;
+
+                  return (
+                    <button
+                      key={cell.dateKey}
+                      type="button"
+                      onClick={() => handleDayClick(cell.date)}
+                      style={{
+                        height: '38px',
+                        border: 'none',
+                        borderRadius: selectedStart || selectedEnd ? '8px' : (selectedMiddle ? '0' : '6px'),
+                        backgroundColor: selectedStart || selectedEnd 
+                          ? '#2563EB' 
+                          : (selectedMiddle ? 'rgba(37, 99, 235, 0.25)' : 'transparent'),
+                        color: selectedStart || selectedEnd 
+                          ? '#FFFFFF' 
+                          : (cell.isCurrentMonth ? '#F8FAFC' : '#475569'),
+                        fontWeight: selectedStart || selectedEnd ? 800 : (cell.isCurrentMonth ? 600 : 400),
+                        fontSize: '0.85rem',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      {cell.dayNumber}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Mobile Footer */}
+            <div
+              style={{
+                borderTop: '1px solid #1E293B',
+                padding: '12px 16px',
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '10px',
+                backgroundColor: '#090D16'
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                style={{
+                  padding: '10px',
+                  backgroundColor: '#1E293B',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: '10px',
+                  color: '#CBD5E1',
+                  fontWeight: 600,
+                  fontSize: '0.85rem',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirm}
+                style={{
+                  padding: '10px',
+                  backgroundColor: '#2563EB',
+                  border: 'none',
+                  borderRadius: '10px',
+                  color: '#FFFFFF',
+                  fontWeight: 700,
+                  fontSize: '0.85rem',
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(37, 99, 235, 0.4)'
+                }}
+              >
+                Aplicar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DESKTOP POPOVER PICKER (Screens >= 768px) */}
+      {isOpen && !isMobile && (
         <div
           style={{
             position: 'absolute',
@@ -292,10 +600,8 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChang
             boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05)',
             display: 'flex',
             flexDirection: 'row',
-            flexWrap: 'wrap',
-            overflow: 'auto',
             width: '740px',
-            maxWidth: '96vw',
+            maxWidth: 'calc(100vw - 32px)',
             maxHeight: '88vh',
             animation: 'fadeIn 0.15s ease-out'
           }}

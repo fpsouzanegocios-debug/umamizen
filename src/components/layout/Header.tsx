@@ -111,16 +111,19 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Category-Specific Date Range Picker Component */}
         {dateRange && onDateRangeChange && CATEGORY_LABELS[activeTab] && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{
-              fontSize: '0.75rem',
-              fontWeight: 700,
-              color: '#38BDF8',
-              backgroundColor: 'rgba(56, 189, 248, 0.1)',
-              border: '1px solid rgba(56, 189, 248, 0.25)',
-              padding: '4px 8px',
-              borderRadius: '6px',
-              whiteSpace: 'nowrap'
-            }}>
+            <span 
+              className="sm-hide"
+              style={{
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                color: '#38BDF8',
+                backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                border: '1px solid rgba(56, 189, 248, 0.25)',
+                padding: '4px 8px',
+                borderRadius: '6px',
+                whiteSpace: 'nowrap'
+              }}
+            >
               Filtro {CATEGORY_LABELS[activeTab]}
             </span>
             <DateRangePicker 
