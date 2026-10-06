@@ -847,10 +847,10 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             </div>
             <div>
               <div style={{ fontWeight: 800, color: '#FBBF24', fontSize: '1rem' }}>
-                {pendingAdjustmentsCount} solicitação(ões) de motoboy aguardando sua conferência!
+                Conferência de Motoboys: {pendingAdjustmentsCount} solicitação(ões) aguardando sua aprovação!
               </div>
               <div style={{ fontSize: '0.82rem', color: '#CBD5E1', marginTop: '2px' }}>
-                Os motoboys ajustaram taxas ou adicionaram corridas faltantes no portal deles. Confira os valores e dê o OK para atualizar o sistema.
+                Os motoboys enviaram fechamentos com corridas, taxas e dinheiro retido. Confira todas as solicitações agrupadas por dia e dê o OK.
               </div>
             </div>
           </div>
@@ -862,7 +862,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             style={{ backgroundColor: '#F59E0B', borderColor: '#F59E0B', color: '#0B0F19', fontWeight: 800, padding: '8px 16px' }}
           >
             <UserCheck size={16} />
-            <span>Conferir e Dar OK Agora</span>
+            <span>Conferir Fechamento do Dia</span>
           </button>
         </div>
       )}

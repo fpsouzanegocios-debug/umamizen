@@ -67,7 +67,7 @@ export interface CourierAdjustment {
   courier_id: string;
   courier_name: string;
   date: string;
-  type: 'edit_fee' | 'new_delivery' | 'remove_delivery';
+  type: 'edit_fee' | 'new_delivery' | 'remove_delivery' | 'daily_conference';
   delivery_id?: string | null;
   order_number?: string | null;
   customer_name?: string | null;

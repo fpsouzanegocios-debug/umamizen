@@ -458,6 +458,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [deleteNote, setDeleteNote] = useState<string>('');
   const [isSubmittingDelete, setIsSubmittingDelete] = useState<boolean>(false);
 
+  // Daily Conference Submission State
+  const [showSendConferenceModal, setShowSendConferenceModal] = useState<boolean>(false);
+  const [conferenceNote, setConferenceNote] = useState<string>('');
+  const [isSubmittingConference, setIsSubmittingConference] = useState<boolean>(false);
+
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Show Toast
@@ -618,6 +623,10 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     };
   }, [courierDeliveries, dayAdjustments, internalOrders, adjustments]);
 
+  const dailyConferenceRecord = useMemo(() => {
+    return dayAdjustments.find((a) => a.type === 'daily_conference');
+  }, [dayAdjustments]);
+
   // Open Edit Modal with optional cash highlight
   const handleOpenEdit = (delivery: Delivery, forceCash = false) => {
     setEditingDelivery(delivery);
@@ -768,6 +777,45 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       alert('Erro ao enviar solicitação: ' + err.message);
     } finally {
       setIsSubmittingDelete(false);
+    }
+  };
+
+  // Submit Full Day Conference to Restaurant
+  const handleSendDailyConference = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authenticatedCourier) return;
+
+    setIsSubmittingConference(true);
+    try {
+      const existing = dayAdjustments.find(a => a.type === 'daily_conference');
+      const summaryText = conferenceNote.trim()
+        ? conferenceNote.trim()
+        : `Fechamento do turno: ${stats.totalCount} entregas, R$ ${stats.totalFee.toFixed(2)} em taxas, R$ ${stats.totalCashCollected.toFixed(2)} em dinheiro retido.`;
+
+      const { error } = await supabase.from('courier_adjustments').upsert({
+        ...(existing ? { id: existing.id } : {}),
+        courier_id: authenticatedCourier.id,
+        courier_name: authenticatedCourier.name,
+        date: selectedDate,
+        type: 'daily_conference',
+        original_fee: stats.totalFee,
+        proposed_fee: stats.totalFee,
+        received_cash: stats.totalCashCollected,
+        notes: summaryText,
+        status: 'pending',
+        created_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+
+      if (error) throw error;
+
+      showToast('Conferência do dia enviada com sucesso! O restaurante recebeu seu fechamento completo.');
+      setShowSendConferenceModal(false);
+      setConferenceNote('');
+      fetchAdjustments();
+    } catch (err: any) {
+      alert('Erro ao enviar conferência: ' + err.message);
+    } finally {
+      setIsSubmittingConference(false);
     }
   };
 
@@ -1229,6 +1277,102 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             </div>
           </div>
         )}
+
+        {/* Daily Conference Section / Button */}
+        <div style={{ marginBottom: '18px' }}>
+          {dailyConferenceRecord?.status === 'approved' ? (
+            <div style={{
+              backgroundColor: 'rgba(16, 185, 129, 0.12)',
+              border: '1.5px solid rgba(16, 185, 129, 0.4)',
+              borderRadius: '12px',
+              padding: '14px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px'
+            }}>
+              <CheckCircle2 size={24} color="#10B981" style={{ flexShrink: 0 }} />
+              <div>
+                <div style={{ fontWeight: 800, color: '#34D399', fontSize: '0.92rem' }}>
+                  Fechamento do Dia Aprovado pelo Restaurante!
+                </div>
+                <div style={{ fontSize: '0.76rem', color: '#CBD5E1', marginTop: '2px' }}>
+                  Todas as suas corridas, taxas e valores deste dia foram conferidos e validados pelo restaurante.
+                </div>
+              </div>
+            </div>
+          ) : dailyConferenceRecord?.status === 'pending' ? (
+            <div style={{
+              backgroundColor: 'rgba(245, 158, 11, 0.12)',
+              border: '1.5px solid rgba(245, 158, 11, 0.4)',
+              borderRadius: '12px',
+              padding: '14px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '10px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <Clock size={24} color="#FBBF24" style={{ flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontWeight: 800, color: '#FBBF24', fontSize: '0.92rem' }}>
+                    Conferência do Dia Enviada ao Restaurante!
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: '#CBD5E1', marginTop: '2px' }}>
+                    Seu fechamento com todas as corridas deste dia foi enviado junto para conferência do gestor.
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setConferenceNote(dailyConferenceRecord.notes || '');
+                  setShowSendConferenceModal(true);
+                }}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: '8px',
+                  backgroundColor: 'rgba(245, 158, 11, 0.2)',
+                  border: '1px solid rgba(245, 158, 11, 0.4)',
+                  color: '#FBBF24',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                Reenviar / Atualizar
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setConferenceNote('');
+                setShowSendConferenceModal(true);
+              }}
+              style={{
+                width: '100%',
+                padding: '15px 18px',
+                background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+                border: 'none',
+                borderRadius: '12px',
+                color: '#FFFFFF',
+                fontSize: '0.95rem',
+                fontWeight: 800,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '10px',
+                boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)'
+              }}
+            >
+              <Send size={18} />
+              <span>Enviar Conferência do Dia para o Restaurante</span>
+            </button>
+          )}
+        </div>
 
         {/* Action Button: Add Missing Delivery */}
         <div style={{ marginBottom: '18px' }}>
@@ -2173,6 +2317,174 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   }}
                 >
                   {isSubmittingDelete ? 'Enviando...' : 'Confirmar e Enviar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Send Daily Conference Modal */}
+      {showSendConferenceModal && (
+        <div className="modal-overlay" style={{ zIndex: 120 }}>
+          <div className="modal-content" style={{ maxWidth: '480px', width: '92%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '10px',
+                  backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                  color: '#10B981',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Send size={18} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.05rem', fontWeight: 800, margin: 0, color: '#F8FAFC' }}>
+                    Enviar Conferência do Dia
+                  </h3>
+                  <p style={{ color: '#94A3B8', fontSize: '0.78rem', margin: 0 }}>
+                    {authenticatedCourier.name} — {formatDateBR(new Date(selectedDate + 'T12:00:00'))}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSendConferenceModal(false)}
+                style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Shift Financial Overview */}
+            <div style={{
+              backgroundColor: '#0F172A',
+              borderRadius: '12px',
+              padding: '14px',
+              marginBottom: '14px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+              fontSize: '0.85rem'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94A3B8' }}>
+                <span>Total de Corridas:</span>
+                <strong style={{ color: '#F8FAFC' }}>{stats.totalCount} entregas</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94A3B8' }}>
+                <span>Total de Taxas a Receber:</span>
+                <strong style={{ color: '#34D399' }}>{formatCurrency(stats.totalFee)}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#94A3B8' }}>
+                <span>Dinheiro Retido com Você:</span>
+                <strong style={{ color: '#FBBF24' }}>{formatCurrency(stats.totalCashCollected)}</strong>
+              </div>
+              <div style={{
+                marginTop: '6px',
+                paddingTop: '8px',
+                borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                fontWeight: 800
+              }}>
+                <span style={{ color: stats.netBalance >= 0 ? '#34D399' : '#FB7185' }}>
+                  {stats.netBalance >= 0 ? 'Líquido a Receber:' : 'Valor a Devolver:'}
+                </span>
+                <span style={{ fontSize: '1.1rem', color: stats.netBalance >= 0 ? '#34D399' : '#FB7185' }}>
+                  {formatCurrency(Math.abs(stats.netBalance))}
+                </span>
+              </div>
+            </div>
+
+            {/* List of Adjustments included */}
+            {dayAdjustments.filter(a => a.type !== 'daily_conference').length > 0 && (
+              <div style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                borderRadius: '10px',
+                padding: '10px 14px',
+                marginBottom: '14px',
+                fontSize: '0.78rem'
+              }}>
+                <div style={{ color: '#CBD5E1', fontWeight: 700, marginBottom: '6px' }}>
+                  Solicitações e alterações incluídas neste envio:
+                </div>
+                <ul style={{ margin: 0, paddingLeft: '16px', color: '#94A3B8', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  {dayAdjustments.filter(a => a.type !== 'daily_conference').map(adj => (
+                    <li key={adj.id}>
+                      <strong style={{ color: '#F8FAFC' }}>#{adj.order_number || 'S/N'}</strong>: {adj.type === 'edit_fee' ? `Taxa ${formatCurrency(adj.proposed_fee)}` : adj.type === 'new_delivery' ? 'Corrida faltante' : 'Remoção'}
+                      {adj.received_cash ? ` (Dinheiro: ${formatCurrency(adj.received_cash)})` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <form onSubmit={handleSendDailyConference}>
+              <div style={{ marginBottom: '18px' }}>
+                <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
+                  Alguma observação para o restaurante? (opcional)
+                </label>
+                <textarea
+                  value={conferenceNote}
+                  onChange={(e) => setConferenceNote(e.target.value)}
+                  placeholder="Ex: Turno finalizado sem problemas, dinheiro conferido..."
+                  rows={2}
+                  style={{
+                    width: '100%',
+                    backgroundColor: '#0F172A',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    borderRadius: '10px',
+                    padding: '10px 12px',
+                    color: '#F8FAFC',
+                    fontSize: '0.85rem',
+                    outline: 'none',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowSendConferenceModal(false)}
+                  style={{
+                    flex: 1,
+                    padding: '12px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                    border: 'none',
+                    borderRadius: '10px',
+                    color: '#CBD5E1',
+                    fontWeight: 600,
+                    fontSize: '0.85rem',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingConference}
+                  style={{
+                    flex: 2,
+                    padding: '12px',
+                    backgroundColor: '#10B981',
+                    border: 'none',
+                    borderRadius: '10px',
+                    color: '#FFFFFF',
+                    fontWeight: 800,
+                    fontSize: '0.88rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Send size={16} />
+                  <span>{isSubmittingConference ? 'Enviando...' : 'Confirmar e Enviar'}</span>
                 </button>
               </div>
             </form>
