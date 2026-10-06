@@ -14,13 +14,19 @@ import {
   Tag,
   Check,
   AlertTriangle,
-  Bell
+  Bell,
+  Repeat
 } from 'lucide-react';
-import { FixedCost, DateRange } from '../../types';
+import { FixedCost, FixedCostPayment, DateRange } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/formatters';
 import { isDateInRange } from '../../lib/dateUtils';
 import { supabase } from '../../lib/supabase';
 import { DateRangePicker } from '../common/DateRangePicker';
+import { 
+  ResolvedFixedCost, 
+  getResolvedFixedCostsForPeriod, 
+  getFixedCostsForSingleMonth 
+} from '../../lib/fixedCostUtils';
 
 const FIXED_COST_CATEGORIES = [
   'Aluguel & Imóvel',
@@ -46,6 +52,7 @@ const PAYMENT_METHODS = [
 
 interface FixedCostsViewProps {
   fixedCosts: FixedCost[];
+  fixedCostPayments?: FixedCostPayment[];
   onRefresh: () => void;
   selectedMonth: number;
   selectedYear: number;
@@ -58,6 +65,7 @@ interface FixedCostsViewProps {
 
 export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
   fixedCosts,
+  fixedCostPayments = [],
   onRefresh,
   selectedMonth,
   selectedYear,
@@ -69,8 +77,8 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
 }) => {
   // Modal states
   const [showModal, setShowModal] = useState<boolean>(isCreateModalOpen);
-  const [editingItem, setEditingItem] = useState<FixedCost | null>(null);
-  const [deletingItem, setDeletingItem] = useState<FixedCost | null>(null);
+  const [editingItem, setEditingItem] = useState<FixedCost | ResolvedFixedCost | null>(null);
+  const [deletingItem, setDeletingItem] = useState<FixedCost | ResolvedFixedCost | null>(null);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -118,28 +126,43 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
   };
 
   // Open Edit Modal
-  const handleOpenEdit = (item: FixedCost) => {
-    setEditingItem(item);
+  const handleOpenEdit = (item: FixedCost | ResolvedFixedCost) => {
+    const original = fixedCosts.find(fc => fc.id === ((item as any).originalId || item.id)) || item;
+    setEditingItem(original);
     setFormData({
-      name: item.name,
-      category: item.category || 'Outros Custos Indiretos',
-      amount: String(item.amount),
-      due_date: item.due_date,
-      recurrence: item.recurrence || 'monthly',
+      name: original.name,
+      category: original.category || 'Outros Custos Indiretos',
+      amount: String(original.amount),
+      due_date: original.due_date,
+      recurrence: original.recurrence || 'monthly',
       is_paid: item.is_paid,
       payment_method: item.payment_method || 'PIX',
-      notes: item.notes || ''
+      notes: original.notes || ''
     });
     setErrorMsg(null);
     setShowModal(true);
   };
 
-  // Compute live status based on due date and is_paid flag (identical to payables logic)
+  // 1. Resolve fixed costs for the active period (supporting recurring monthly costs)
+  const resolvedFixedCosts = useMemo(() => {
+    if (periodFilter === 'all') {
+      return getFixedCostsForSingleMonth(fixedCosts, fixedCostPayments, selectedYear, selectedMonth);
+    }
+    return getResolvedFixedCostsForPeriod(
+      fixedCosts,
+      fixedCostPayments,
+      dateRange,
+      selectedMonth,
+      selectedYear
+    );
+  }, [fixedCosts, fixedCostPayments, periodFilter, dateRange, selectedMonth, selectedYear]);
+
+  // 2. Compute live status based on due date and is_paid flag for this month
   const computedFixedCosts = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    return fixedCosts.map((c) => {
+    return resolvedFixedCosts.map((c) => {
       if (c.is_paid) {
         return { ...c, calculatedStatus: 'paid' as const, diffDays: null };
       }
@@ -157,24 +180,12 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
         return { ...c, calculatedStatus: 'pending' as const, diffDays };
       }
     });
-  }, [fixedCosts, alertDays]);
+  }, [resolvedFixedCosts, alertDays]);
 
-  // Filter fixed costs according to dateRange, search, category, period and status
+  // 3. Filter fixed costs according to search, category and status
   const filteredCosts = useMemo(() => {
     return computedFixedCosts.filter((cost) => {
-      // 1. Period / Date Range (idem PayablesView)
-      if (periodFilter === 'period') {
-        if (dateRange) {
-          if (!isDateInRange(cost.due_date, dateRange)) return false;
-        } else {
-          const d = new Date(cost.due_date + 'T00:00:00');
-          if (d.getMonth() + 1 !== selectedMonth || d.getFullYear() !== selectedYear) {
-            return false;
-          }
-        }
-      }
-
-      // 2. Search query
+      // Search query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const matchesName = cost.name.toLowerCase().includes(q);
@@ -183,12 +194,12 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
         if (!matchesName && !matchesCat && !matchesNotes) return false;
       }
 
-      // 3. Category
+      // Category
       if (categoryFilter !== 'all' && cost.category !== categoryFilter) {
         return false;
       }
 
-      // 4. Status
+      // Status
       if (statusFilter === 'overdue' && cost.calculatedStatus !== 'overdue') return false;
       if (statusFilter === 'due_today' && cost.calculatedStatus !== 'due_today') return false;
       if (statusFilter === 'due_soon' && cost.calculatedStatus !== 'due_soon') return false;
@@ -197,7 +208,7 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
 
       return true;
     });
-  }, [computedFixedCosts, dateRange, selectedMonth, selectedYear, searchQuery, categoryFilter, statusFilter, periodFilter]);
+  }, [computedFixedCosts, searchQuery, categoryFilter, statusFilter]);
 
   // Totals & Alerts calculations
   const stats = useMemo(() => {
@@ -246,7 +257,8 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
 
     try {
       if (editingItem) {
-        // Update existing
+        const targetId = (editingItem as any).originalId || editingItem.id;
+        // Update existing base cost
         const { error } = await supabase
           .from('fixed_costs')
           .update({
@@ -255,17 +267,32 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
             amount: numAmount,
             due_date: formData.due_date,
             recurrence: formData.recurrence,
-            is_paid: formData.is_paid,
             payment_method: formData.payment_method,
             notes: formData.notes.trim() || null,
             updated_at: new Date().toISOString()
           })
-          .eq('id', editingItem.id);
+          .eq('id', targetId);
 
         if (error) throw error;
+
+        // Also update payment record for this month
+        const activeYM = `${selectedYear}-${String(selectedMonth).padStart(2, '0')}`;
+        await supabase
+          .from('fixed_cost_payments')
+          .upsert({
+            fixed_cost_id: targetId,
+            year_month: activeYM,
+            is_paid: formData.is_paid,
+            paid_amount: numAmount,
+            payment_date: formData.is_paid ? new Date().toISOString().split('T')[0] : null,
+            payment_method: formData.payment_method,
+            updated_at: new Date().toISOString()
+          }, {
+            onConflict: 'fixed_cost_id,year_month'
+          });
       } else {
         // Insert new
-        const { error } = await supabase
+        const { data: inserted, error } = await supabase
           .from('fixed_costs')
           .insert({
             name: formData.name.trim(),
@@ -276,9 +303,28 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
             is_paid: formData.is_paid,
             payment_method: formData.payment_method,
             notes: formData.notes.trim() || null
-          });
+          })
+          .select()
+          .single();
 
         if (error) throw error;
+
+        if (inserted) {
+          const ym = formData.due_date.slice(0, 7);
+          await supabase
+            .from('fixed_cost_payments')
+            .upsert({
+              fixed_cost_id: inserted.id,
+              year_month: ym,
+              is_paid: formData.is_paid,
+              paid_amount: numAmount,
+              payment_date: formData.is_paid ? new Date().toISOString().split('T')[0] : null,
+              payment_method: formData.payment_method,
+              updated_at: new Date().toISOString()
+            }, {
+              onConflict: 'fixed_cost_id,year_month'
+            });
+        }
       }
 
       setShowModal(false);
@@ -292,21 +338,48 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
     }
   };
 
-  // Toggle Paid status directly from list
-  const handleTogglePaid = async (item: FixedCost) => {
+  // Toggle Paid status directly from list (saves per-month in fixed_cost_payments)
+  const handleTogglePaid = async (item: ResolvedFixedCost) => {
     try {
-      const { error } = await supabase
-        .from('fixed_costs')
-        .update({
-          is_paid: !item.is_paid,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', item.id);
+      const newPaid = !item.is_paid;
+      const todayStr = new Date().toISOString().split('T')[0];
+      const targetId = item.originalId || item.id;
+      const targetYM = item.year_month;
 
-      if (error) throw error;
+      // 1. Upsert into fixed_cost_payments for this specific month
+      const { error: pError } = await supabase
+        .from('fixed_cost_payments')
+        .upsert({
+          fixed_cost_id: targetId,
+          year_month: targetYM,
+          is_paid: newPaid,
+          paid_amount: Number(item.amount),
+          payment_date: newPaid ? todayStr : null,
+          payment_method: item.payment_method || 'PIX',
+          updated_at: new Date().toISOString()
+        }, {
+          onConflict: 'fixed_cost_id,year_month'
+        });
+
+      if (pError) throw pError;
+
+      // 2. Also keep base fixed_costs in sync if it is the registration month
+      const origYM = item.due_date ? item.due_date.slice(0, 7) : '';
+      if (origYM === targetYM) {
+        await supabase
+          .from('fixed_costs')
+          .update({
+            is_paid: newPaid,
+            payment_date: newPaid ? todayStr : null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', targetId);
+      }
+
       onRefresh();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error toggling paid state:', err);
+      alert('Erro ao atualizar status de pagamento: ' + (err.message || 'Erro desconhecido'));
     }
   };
 
@@ -315,10 +388,11 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
     if (!deletingItem) return;
     setIsDeleting(true);
     try {
+      const targetId = (deletingItem as any).originalId || deletingItem.id;
       const { error } = await supabase
         .from('fixed_costs')
         .delete()
-        .eq('id', deletingItem.id);
+        .eq('id', targetId);
 
       if (error) throw error;
       setDeletingItem(null);
@@ -352,7 +426,7 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
             <div>
               <h1 style={{ fontSize: '1.75rem', color: '#F8FAFC', margin: 0 }}>Custos Fixos & Indiretos</h1>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '2px 0 0 0' }}>
-                Despesas estruturais da Umami Zen (Aluguel, Sistemas, Internet, Marketing, Contabilidade, etc.)
+                Custos fixos recorrentes para todos os meses a partir do cadastro • Baixa individual mensal
               </p>
             </div>
           </div>
@@ -552,9 +626,37 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
                   <tr key={item.id}>
                     <td>
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <span style={{ fontWeight: 600, color: '#F8FAFC', fontSize: '0.95rem' }}>
-                          {item.name}
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontWeight: 600, color: '#F8FAFC', fontSize: '0.95rem' }}>
+                            {item.name}
+                          </span>
+                          {item.recurrence !== 'one_time' ? (
+                            <span style={{
+                              fontSize: '0.68rem',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              backgroundColor: 'rgba(56, 189, 248, 0.12)',
+                              color: '#38BDF8',
+                              fontWeight: 600,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px'
+                            }}>
+                              <Repeat size={10} /> Mensal
+                            </span>
+                          ) : (
+                            <span style={{
+                              fontSize: '0.68rem',
+                              padding: '2px 6px',
+                              borderRadius: '4px',
+                              backgroundColor: 'rgba(148, 163, 184, 0.12)',
+                              color: '#94A3B8',
+                              fontWeight: 600
+                            }}>
+                              Único
+                            </span>
+                          )}
+                        </div>
                         {item.notes && (
                           <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
                             {item.notes}
@@ -825,6 +927,23 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
                     ))}
                   </select>
                 </div>
+              </div>
+
+              {/* Recorrência */}
+              <div className="form-group" style={{ marginBottom: '14px' }}>
+                <label className="form-label">Recorrência do Custo</label>
+                <select
+                  value={formData.recurrence}
+                  onChange={(e) => setFormData({ ...formData, recurrence: e.target.value as any })}
+                  className="select"
+                >
+                  <option value="monthly">🔁 Mensal (Fixo em todos os meses a partir deste - Padrão)</option>
+                  <option value="one_time">📅 Pagamento Único (Apenas neste mês)</option>
+                  <option value="yearly">📆 Anual (Repete uma vez ao ano)</option>
+                </select>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
+                  Custos mensais se repetem automaticamente em todos os meses seguintes, mantendo o dia de vencimento.
+                </span>
               </div>
 
               {/* Status Pago Toggle (Padrão Insumos / Sistema) */}

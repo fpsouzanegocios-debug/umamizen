@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -14,13 +14,15 @@ import {
   UploadCloud, 
   Plus, 
   CheckCircle2, 
-  ArrowRight,
-  ShieldAlert,
-  Flame,
-  Clock,
-  Layers,
-  Sparkles,
-  Building2
+  ArrowRight, 
+  ShieldAlert, 
+  Flame, 
+  Clock, 
+  Layers, 
+  Sparkles, 
+  Building2, 
+  Calendar, 
+  ArrowUpDown 
 } from 'lucide-react';
 import { 
   Order, 
@@ -29,15 +31,26 @@ import {
   FreelancerShift, 
   Investment, 
   CashTransaction, 
-  CashInitialBalance,
+  CashInitialBalance, 
   MonthlyGoal, 
   ClosedDay, 
-  SystemSettings,
-  DateRange,
-  FixedCost
+  SystemSettings, 
+  DateRange, 
+  FixedCost, 
+  FixedCostPayment 
 } from '../../types';
 import { formatCurrency, formatPercent } from '../../lib/formatters';
-import { isDateInRange, getLocalDateKey, getOperationalDateKey, getOperationalTodayKey } from '../../lib/dateUtils';
+import { 
+  isDateInRange, 
+  getLocalDateKey, 
+  getOperationalDateKey, 
+  getOperationalTodayKey, 
+  getPreviousMonthEquivalentRange, 
+  ComparisonMode,
+  startOfDay,
+  endOfDay
+} from '../../lib/dateUtils';
+import { getResolvedFixedCostsForPeriod } from '../../lib/fixedCostUtils';
 import { TabType } from '../layout/Sidebar';
 import { DateRangePicker } from '../common/DateRangePicker';
 
@@ -53,6 +66,7 @@ interface DashboardViewProps {
   closedDays: ClosedDay[];
   settings: SystemSettings;
   fixedCosts?: FixedCost[];
+  fixedCostPayments?: FixedCostPayment[];
   selectedMonth: number;
   selectedYear: number;
   dateRange?: DateRange;
@@ -77,6 +91,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   closedDays,
   settings,
   fixedCosts = [],
+  fixedCostPayments = [],
   selectedMonth,
   selectedYear,
   dateRange,
@@ -88,6 +103,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenNewPayable,
   onOpenNewInvestment
 }) => {
+  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>('calendar_day');
+
   // Current Period Completed Orders (using dateRange if present, else month/year)
   const currentOrders = useMemo(() => {
     return orders.filter((o) => {
@@ -108,22 +125,26 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return currentOrders.filter((o) => !o.is_canceled);
   }, [currentOrders]);
 
-  // Previous Month Completed Orders (for comparison - Section 30)
-  const previousMonth = selectedMonth === 1 ? 12 : selectedMonth - 1;
-  const previousYear = selectedMonth === 1 ? selectedYear - 1 : selectedYear;
+  // Previous Month / Day Equivalent Range (Section 30)
+  const comparisonInfo = useMemo(() => {
+    if (dateRange) {
+      return getPreviousMonthEquivalentRange(dateRange, comparisonMode);
+    }
+    const sDate = new Date(selectedYear, selectedMonth - 1, 1);
+    const eDate = new Date(selectedYear, selectedMonth, 0);
+    return getPreviousMonthEquivalentRange({
+      startDate: startOfDay(sDate),
+      endDate: endOfDay(eDate),
+      label: `${selectedMonth}/${selectedYear}`
+    }, comparisonMode);
+  }, [dateRange, selectedMonth, selectedYear, comparisonMode]);
 
   const previousCompletedOrders = useMemo(() => {
     return orders.filter((o) => {
       if (o.is_canceled) return false;
-      const opKey = getOperationalDateKey(o.order_date);
-      if (opKey && /^\d{4}-\d{2}-\d{2}$/.test(opKey)) {
-        const [y, m] = opKey.split('-').map(Number);
-        return m === previousMonth && y === previousYear;
-      }
-      const d = new Date(o.order_date);
-      return d.getMonth() + 1 === previousMonth && d.getFullYear() === previousYear;
+      return isDateInRange(o.order_date, comparisonInfo.previousRange);
     });
-  }, [orders, previousMonth, previousYear]);
+  }, [orders, comparisonInfo.previousRange]);
 
   // Orders financial breakdown
   const orderStats = useMemo(() => {
@@ -143,13 +164,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return { count, gross, platformFees, cardFees, adjustments, net, avgTicket, grossToday };
   }, [completedOrders]);
 
-  // Previous Month metrics
+  // Previous Month / Day metrics (exact matching days)
   const prevOrderStats = useMemo(() => {
     const count = previousCompletedOrders.length;
     const gross = previousCompletedOrders.reduce((acc, o) => acc + Number(o.gross_amount || 0), 0);
+    const platformFees = previousCompletedOrders.reduce((acc, o) => acc + Number(o.platform_fee_amount || 0), 0);
+    const cardFees = previousCompletedOrders.reduce((acc, o) => acc + Number(o.card_fee_amount || 0), 0);
+    const adjustments = previousCompletedOrders.reduce((acc, o) => acc + Number(o.adjustment_amount || 0), 0);
     const net = previousCompletedOrders.reduce((acc, o) => acc + Number(o.net_amount || 0), 0);
     const avgTicket = count > 0 ? gross / count : 0;
-    return { count, gross, net, avgTicket };
+    return { count, gross, platformFees, cardFees, adjustments, net, avgTicket };
   }, [previousCompletedOrders]);
 
   // Deliveries in current period (operational shift aware)
@@ -255,36 +279,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return currentCashOutflows.reduce((acc, t) => acc + Number(t.amount || 0), 0);
   }, [currentCashOutflows]);
 
-  // Fixed costs in current period (Custos Fixos / Indiretos)
+  // Fixed costs in current period (Custos Fixos / Indiretos recorrentes)
   const currentFixedCosts = useMemo(() => {
-    return fixedCosts.filter((fc) => {
-      if (dateRange) {
-        return isDateInRange(fc.due_date, dateRange);
-      }
-      const dt = new Date(fc.due_date + 'T00:00:00');
-      return dt.getMonth() + 1 === selectedMonth && dt.getFullYear() === selectedYear;
-    });
-  }, [fixedCosts, dateRange, selectedMonth, selectedYear]);
+    return getResolvedFixedCostsForPeriod(
+      fixedCosts,
+      fixedCostPayments,
+      dateRange,
+      selectedMonth,
+      selectedYear
+    );
+  }, [fixedCosts, fixedCostPayments, dateRange, selectedMonth, selectedYear]);
 
   const fixedCostsTotal = useMemo(() => {
     return currentFixedCosts.reduce((acc, fc) => acc + Number(fc.amount || 0), 0);
   }, [currentFixedCosts]);
 
-  // Vencimentos de Custos Fixos (Alertas)
+  // Vencimentos de Custos Fixos (Alertas no período)
   const overdueFixedCosts = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    return fixedCosts.filter((fc) => {
+    return currentFixedCosts.filter((fc) => {
       if (fc.is_paid) return false;
       const due = new Date(fc.due_date + 'T00:00:00');
       return due < today;
     });
-  }, [fixedCosts]);
+  }, [currentFixedCosts]);
 
   const dueTodayFixedCosts = useMemo(() => {
     const todayStr = new Date().toISOString().split('T')[0];
-    return fixedCosts.filter((fc) => !fc.is_paid && fc.due_date === todayStr);
-  }, [fixedCosts]);
+    return currentFixedCosts.filter((fc) => !fc.is_paid && fc.due_date === todayStr);
+  }, [currentFixedCosts]);
 
   // Lucro Real (Verdadeiro Lucro Líquido):
   // Faturamento Líquido - Saídas - Taxa de Motoboys - Insumos a Pagar - Investimentos no Mês - Gastos com Freelancer - Custos Fixos
@@ -491,15 +515,75 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     return list;
   }, [overduePayables, overdueFixedCosts, dueTodayPayables, dueTodayFixedCosts, currentOrders, freelancersPending]);
 
-  // Month-over-month variations (Section 30)
-  const momGrowth = useMemo(() => {
-    if (prevOrderStats.gross === 0) return null;
-    const grossVar = ((orderStats.gross - prevOrderStats.gross) / prevOrderStats.gross) * 100;
-    const ordersVar = prevOrderStats.count > 0 ? ((orderStats.count - prevOrderStats.count) / prevOrderStats.count) * 100 : 0;
-    const netVar = prevOrderStats.net > 0 ? ((orderStats.net - prevOrderStats.net) / prevOrderStats.net) * 100 : 0;
+  // Period-over-period variations (exact day or period match - Section 30)
+  const comparisonStats = useMemo(() => {
+    const prevGross = prevOrderStats.gross;
+    const prevCount = prevOrderStats.count;
+    const prevNet = prevOrderStats.net;
+    const prevTicket = prevOrderStats.avgTicket;
 
-    return { grossVar, ordersVar, netVar };
+    const currGross = orderStats.gross;
+    const currCount = orderStats.count;
+    const currNet = orderStats.net;
+    const currTicket = orderStats.avgTicket;
+
+    const grossDiff = currGross - prevGross;
+    const grossVar = prevGross > 0 ? (grossDiff / prevGross) * 100 : (currGross > 0 ? 100 : 0);
+
+    const countDiff = currCount - prevCount;
+    const countVar = prevCount > 0 ? (countDiff / prevCount) * 100 : (currCount > 0 ? 100 : 0);
+
+    const netDiff = currNet - prevNet;
+    const netVar = prevNet > 0 ? (netDiff / prevNet) * 100 : (currNet > 0 ? 100 : 0);
+
+    const ticketDiff = currTicket - prevTicket;
+    const ticketVar = prevTicket > 0 ? (ticketDiff / prevTicket) * 100 : (currTicket > 0 ? 100 : 0);
+
+    return {
+      grossDiff,
+      grossVar,
+      countDiff,
+      countVar,
+      netDiff,
+      netVar,
+      ticketDiff,
+      ticketVar,
+      hasData: currCount > 0 || prevCount > 0
+    };
   }, [orderStats, prevOrderStats]);
+
+  // Channel Breakdown comparison (iFood, AiqFome, Cardápio Digital)
+  const channelComparison = useMemo(() => {
+    const defaultChannels = ['iFood', 'AiqFome', 'Cardápio Digital'];
+    const channelsSet = new Set(defaultChannels);
+    completedOrders.forEach((o) => o.channel && channelsSet.add(o.channel));
+    previousCompletedOrders.forEach((o) => o.channel && channelsSet.add(o.channel));
+
+    return Array.from(channelsSet).map((ch) => {
+      const curr = completedOrders.filter((o) => o.channel === ch);
+      const currGross = curr.reduce((acc, o) => acc + Number(o.gross_amount || 0), 0);
+      const currCount = curr.length;
+
+      const prev = previousCompletedOrders.filter((o) => o.channel === ch);
+      const prevGross = prev.reduce((acc, o) => acc + Number(o.gross_amount || 0), 0);
+      const prevCount = prev.length;
+
+      const grossDiff = currGross - prevGross;
+      const grossVar = prevGross > 0 ? (grossDiff / prevGross) * 100 : (currGross > 0 ? 100 : 0);
+      const countDiff = currCount - prevCount;
+
+      return {
+        channel: ch,
+        currGross,
+        currCount,
+        prevGross,
+        prevCount,
+        grossDiff,
+        grossVar,
+        countDiff
+      };
+    }).filter((c) => c.currCount > 0 || c.prevCount > 0);
+  }, [completedOrders, previousCompletedOrders]);
 
   return (
     <div className="page-container">
@@ -906,45 +990,270 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Month Comparison (Section 30) */}
-      {momGrowth && (
-        <div className="card" style={{ padding: '20px' }}>
-          <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#F8FAFC', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <TrendingUp size={18} color="#34D399" />
-            <span>Comparação com o Mês Anterior ({previousMonth}/{previousYear})</span>
+      {/* Month / Day Comparison (Section 30) */}
+      {comparisonStats.hasData && (
+        <div className="card" style={{ padding: '22px' }}>
+          {/* Top Bar of Comparison */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px',
+            marginBottom: '18px',
+            borderBottom: '1px solid var(--border-color)',
+            paddingBottom: '14px'
+          }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <TrendingUp size={20} color="#34D399" />
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#F8FAFC', margin: 0 }}>
+                  Comparativo de Vendas vs Mês Anterior
+                </h3>
+                <span style={{
+                  fontSize: '0.72rem',
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  backgroundColor: 'rgba(56, 189, 248, 0.12)',
+                  color: '#38BDF8',
+                  fontWeight: 600
+                }}>
+                  {comparisonInfo.isSingleDay ? 'Dia a Dia' : comparisonInfo.isFullMonth ? 'Mês Fechado' : 'Período Equivalente'}
+                </span>
+              </div>
+              <p style={{ margin: '4px 0 0 0', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                Comparando <strong style={{ color: '#F8FAFC' }}>{comparisonInfo.currentLabel}</strong> com <strong style={{ color: '#F8FAFC' }}>{comparisonInfo.previousLabel}</strong> ({comparisonInfo.modeDescription})
+              </p>
+            </div>
+
+            {/* Toggle Mode for single day comparison */}
+            {comparisonInfo.isSingleDay && (
+              <div style={{
+                display: 'inline-flex',
+                background: 'rgba(255, 255, 255, 0.05)',
+                padding: '3px',
+                borderRadius: '8px',
+                border: '1px solid var(--border-color)',
+                gap: '4px'
+              }}>
+                <button
+                  type="button"
+                  onClick={() => setComparisonMode('calendar_day')}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: comparisonMode === 'calendar_day' ? 'var(--accent-primary)' : 'transparent',
+                    color: comparisonMode === 'calendar_day' ? '#FFFFFF' : 'var(--text-secondary)',
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                  title="Compara o mesmo dia numérico do mês"
+                >
+                  <Calendar size={13} />
+                  <span>Mesmo Dia ({comparisonInfo.targetDayOfWeekName?.slice(0, 3)} vs {comparisonInfo.previousDayOfWeekName?.slice(0, 3)})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setComparisonMode('weekday')}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    background: comparisonMode === 'weekday' ? 'var(--accent-primary)' : 'transparent',
+                    color: comparisonMode === 'weekday' ? '#FFFFFF' : 'var(--text-secondary)',
+                    transition: 'all 0.2s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                  title="Compara com o mesmo dia da semana no mês anterior"
+                >
+                  <ArrowUpDown size={13} />
+                  <span>Mesmo Dia da Semana ({comparisonInfo.targetDayOfWeekName?.slice(0, 3)} vs {comparisonInfo.targetDayOfWeekName?.slice(0, 3)})</span>
+                </button>
+              </div>
+            )}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
-            <div style={{ backgroundColor: 'var(--bg-input)', padding: '14px', borderRadius: '10px' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Variação de Faturamento</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 800, marginTop: '2px', color: momGrowth.grossVar >= 0 ? '#34D399' : '#FB7185' }}>
-                {momGrowth.grossVar >= 0 ? '+' : ''}{momGrowth.grossVar.toFixed(1)}%
+          {/* 4 KPI Cards Grid */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: '14px',
+            marginBottom: channelComparison.length > 0 ? '18px' : '0'
+          }}>
+            {/* 1. Faturamento Bruto */}
+            <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Faturamento Bruto</span>
+                <span style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  backgroundColor: comparisonStats.grossVar >= 0 ? 'rgba(52, 211, 153, 0.12)' : 'rgba(251, 113, 133, 0.12)',
+                  color: comparisonStats.grossVar >= 0 ? '#34D399' : '#FB7185'
+                }}>
+                  {comparisonStats.grossVar >= 0 ? '+' : ''}{comparisonStats.grossVar.toFixed(1)}%
+                </span>
               </div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                {formatCurrency(orderStats.gross)} vs {formatCurrency(prevOrderStats.gross)}
+              <div style={{ fontSize: '1.4rem', fontWeight: 800, marginTop: '6px', color: '#F8FAFC' }}>
+                {formatCurrency(orderStats.gross)}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Anterior: {formatCurrency(prevOrderStats.gross)}</span>
+                <span style={{ color: comparisonStats.grossDiff >= 0 ? '#34D399' : '#FB7185', fontWeight: 600 }}>
+                  {comparisonStats.grossDiff >= 0 ? '+' : ''}{formatCurrency(comparisonStats.grossDiff)}
+                </span>
               </div>
             </div>
 
-            <div style={{ backgroundColor: 'var(--bg-input)', padding: '14px', borderRadius: '10px' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Variação de Pedidos</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 800, marginTop: '2px', color: momGrowth.ordersVar >= 0 ? '#34D399' : '#FB7185' }}>
-                {momGrowth.ordersVar >= 0 ? '+' : ''}{momGrowth.ordersVar.toFixed(1)}%
+            {/* 2. Total de Pedidos */}
+            <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Total de Pedidos</span>
+                <span style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  backgroundColor: comparisonStats.countVar >= 0 ? 'rgba(52, 211, 153, 0.12)' : 'rgba(251, 113, 133, 0.12)',
+                  color: comparisonStats.countVar >= 0 ? '#34D399' : '#FB7185'
+                }}>
+                  {comparisonStats.countVar >= 0 ? '+' : ''}{comparisonStats.countVar.toFixed(1)}%
+                </span>
               </div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                {orderStats.count} pedidos vs {prevOrderStats.count} pedidos
+              <div style={{ fontSize: '1.4rem', fontWeight: 800, marginTop: '6px', color: '#F8FAFC' }}>
+                {orderStats.count} <span style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-secondary)' }}>pedidos</span>
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Anterior: {prevOrderStats.count} pedidos</span>
+                <span style={{ color: comparisonStats.countDiff >= 0 ? '#34D399' : '#FB7185', fontWeight: 600 }}>
+                  {comparisonStats.countDiff >= 0 ? '+' : ''}{comparisonStats.countDiff}
+                </span>
               </div>
             </div>
 
-            <div style={{ backgroundColor: 'var(--bg-input)', padding: '14px', borderRadius: '10px' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Variação Faturamento Líquido</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 800, marginTop: '2px', color: momGrowth.netVar >= 0 ? '#34D399' : '#FB7185' }}>
-                {momGrowth.netVar >= 0 ? '+' : ''}{momGrowth.netVar.toFixed(1)}%
+            {/* 3. Faturamento Líquido */}
+            <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Faturamento Líquido</span>
+                <span style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  backgroundColor: comparisonStats.netVar >= 0 ? 'rgba(52, 211, 153, 0.12)' : 'rgba(251, 113, 133, 0.12)',
+                  color: comparisonStats.netVar >= 0 ? '#34D399' : '#FB7185'
+                }}>
+                  {comparisonStats.netVar >= 0 ? '+' : ''}{comparisonStats.netVar.toFixed(1)}%
+                </span>
               </div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                {formatCurrency(orderStats.net)} vs {formatCurrency(prevOrderStats.net)}
+              <div style={{ fontSize: '1.4rem', fontWeight: 800, marginTop: '6px', color: '#34D399' }}>
+                {formatCurrency(orderStats.net)}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Anterior: {formatCurrency(prevOrderStats.net)}</span>
+                <span style={{ color: comparisonStats.netDiff >= 0 ? '#34D399' : '#FB7185', fontWeight: 600 }}>
+                  {comparisonStats.netDiff >= 0 ? '+' : ''}{formatCurrency(comparisonStats.netDiff)}
+                </span>
+              </div>
+            </div>
+
+            {/* 4. Ticket Médio */}
+            <div style={{ backgroundColor: 'var(--bg-input)', padding: '16px', borderRadius: '12px', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Ticket Médio</span>
+                <span style={{
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  backgroundColor: comparisonStats.ticketVar >= 0 ? 'rgba(52, 211, 153, 0.12)' : 'rgba(251, 113, 133, 0.12)',
+                  color: comparisonStats.ticketVar >= 0 ? '#34D399' : '#FB7185'
+                }}>
+                  {comparisonStats.ticketVar >= 0 ? '+' : ''}{comparisonStats.ticketVar.toFixed(1)}%
+                </span>
+              </div>
+              <div style={{ fontSize: '1.4rem', fontWeight: 800, marginTop: '6px', color: '#F8FAFC' }}>
+                {formatCurrency(orderStats.avgTicket)}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Anterior: {formatCurrency(prevOrderStats.avgTicket)}</span>
+                <span style={{ color: comparisonStats.ticketDiff >= 0 ? '#34D399' : '#FB7185', fontWeight: 600 }}>
+                  {comparisonStats.ticketDiff >= 0 ? '+' : ''}{formatCurrency(comparisonStats.ticketDiff)}
+                </span>
               </div>
             </div>
           </div>
+
+          {/* Breakdown por Canal de Venda */}
+          {channelComparison.length > 0 && (
+            <div style={{
+              backgroundColor: 'rgba(0, 0, 0, 0.2)',
+              borderRadius: '10px',
+              padding: '14px',
+              border: '1px solid var(--border-color)'
+            }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Desempenho por Canal vs Mês Anterior
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
+                {channelComparison.map((ch) => (
+                  <div key={ch.channel} style={{
+                    backgroundColor: 'var(--bg-input)',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontWeight: 700, color: '#F8FAFC', fontSize: '0.85rem' }}>{ch.channel}</span>
+                      <span style={{
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        color: ch.grossVar >= 0 ? '#34D399' : '#FB7185'
+                      }}>
+                        {ch.grossVar >= 0 ? '+' : ''}{ch.grossVar.toFixed(1)}%
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.78rem' }}>
+                      <span style={{ color: '#F8FAFC', fontWeight: 600 }}>{formatCurrency(ch.currGross)} ({ch.currCount} ped.)</span>
+                      <span style={{ color: 'var(--text-muted)' }}>ant: {formatCurrency(ch.prevGross)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Fallback note if previous period had 0 orders */}
+          {prevOrderStats.count === 0 && (
+            <div style={{
+              marginTop: '12px',
+              padding: '10px 14px',
+              borderRadius: '8px',
+              backgroundColor: 'rgba(56, 189, 248, 0.08)',
+              border: '1px solid rgba(56, 189, 248, 0.2)',
+              fontSize: '0.8rem',
+              color: '#38BDF8',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
+            }}>
+              ℹ️ No período correspondente do mês anterior ({comparisonInfo.previousLabel}) não constam vendas registradas ou o restaurante esteve fechado.
+            </div>
+          )}
         </div>
       )}
     </div>

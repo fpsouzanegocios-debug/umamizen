@@ -409,3 +409,143 @@ export const getDefaultDateRange = (): DateRange => {
     presetKey: 'this_month'
   };
 };
+
+export type ComparisonMode = 'calendar_day' | 'weekday';
+
+export interface PreviousPeriodResult {
+  previousRange: DateRange;
+  isSingleDay: boolean;
+  isFullMonth: boolean;
+  currentLabel: string;
+  previousLabel: string;
+  modeDescription: string;
+  targetDayOfWeekName?: string;
+  previousDayOfWeekName?: string;
+}
+
+/**
+ * Calculates the exact equivalent date range in the previous month.
+ * - Single day: matches the same calendar day (e.g. 06/10 vs 06/09) or same weekday (e.g. 1st Tue vs 1st Tue).
+ * - Multi-day range: matches the exact same day range in the previous month (e.g. 01/10 to 06/10 vs 01/09 to 06/09).
+ * - Full month: matches the entire previous month (e.g. 01/10 to 31/10 vs 01/09 to 30/09).
+ */
+export const getPreviousMonthEquivalentRange = (
+  currentRange: DateRange,
+  mode: ComparisonMode = 'calendar_day'
+): PreviousPeriodResult => {
+  const start = new Date(currentRange.startDate);
+  const end = new Date(currentRange.endDate);
+
+  const isSingleDay =
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth() &&
+    start.getDate() === end.getDate();
+
+  const daysInCurrentMonth = new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate();
+  const isFullMonth =
+    start.getDate() === 1 &&
+    end.getDate() === daysInCurrentMonth &&
+    start.getMonth() === end.getMonth() &&
+    start.getFullYear() === end.getFullYear();
+
+  const prevMonth = start.getMonth() === 0 ? 11 : start.getMonth() - 1;
+  const prevYear = start.getMonth() === 0 ? start.getFullYear() - 1 : start.getFullYear();
+  const maxDaysInPrevMonth = new Date(prevYear, prevMonth + 1, 0).getDate();
+
+  const WEEKDAY_NAMES_PT = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+
+  if (isFullMonth) {
+    const prevStart = startOfDay(new Date(prevYear, prevMonth, 1));
+    const prevEnd = endOfDay(new Date(prevYear, prevMonth, maxDaysInPrevMonth));
+    return {
+      previousRange: {
+        startDate: prevStart,
+        endDate: prevEnd,
+        label: `${MONTH_NAMES_PT[prevMonth]}/${prevYear}`
+      },
+      isSingleDay: false,
+      isFullMonth: true,
+      currentLabel: `${MONTH_NAMES_PT[start.getMonth()]}/${start.getFullYear()}`,
+      previousLabel: `${MONTH_NAMES_PT[prevMonth]}/${prevYear}`,
+      modeDescription: `Mês Completo Anterior (${MONTH_NAMES_PT[prevMonth]}/${prevYear})`
+    };
+  }
+
+  if (isSingleDay) {
+    const currentWeekday = start.getDay();
+    const currentWeekdayName = WEEKDAY_NAMES_PT[currentWeekday];
+
+    if (mode === 'weekday') {
+      // Find the equivalent weekday in previous month (e.g. 1st Tuesday, 2nd Saturday)
+      const occurrence = Math.ceil(start.getDate() / 7);
+
+      const prevOccurrences: number[] = [];
+      for (let d = 1; d <= maxDaysInPrevMonth; d++) {
+        const testDate = new Date(prevYear, prevMonth, d);
+        if (testDate.getDay() === currentWeekday) {
+          prevOccurrences.push(d);
+        }
+      }
+
+      const targetDay = prevOccurrences[occurrence - 1] || prevOccurrences[prevOccurrences.length - 1] || 1;
+      const prevStart = startOfDay(new Date(prevYear, prevMonth, targetDay));
+      const prevEnd = endOfDay(new Date(prevYear, prevMonth, targetDay));
+      const prevWeekdayName = WEEKDAY_NAMES_PT[prevStart.getDay()];
+
+      return {
+        previousRange: {
+          startDate: prevStart,
+          endDate: prevEnd,
+          label: `${formatDateBR(prevStart)} (${prevWeekdayName})`
+        },
+        isSingleDay: true,
+        isFullMonth: false,
+        currentLabel: `${formatDateBR(start)} (${currentWeekdayName})`,
+        previousLabel: `${formatDateBR(prevStart)} (${prevWeekdayName})`,
+        modeDescription: `Mesmo dia da semana (${occurrence}ª ${currentWeekdayName})`,
+        targetDayOfWeekName: currentWeekdayName,
+        previousDayOfWeekName: prevWeekdayName
+      };
+    } else {
+      // Calendar day (same day of month)
+      const targetDay = Math.min(start.getDate(), maxDaysInPrevMonth);
+      const prevStart = startOfDay(new Date(prevYear, prevMonth, targetDay));
+      const prevEnd = endOfDay(new Date(prevYear, prevMonth, targetDay));
+      const prevWeekdayName = WEEKDAY_NAMES_PT[prevStart.getDay()];
+
+      return {
+        previousRange: {
+          startDate: prevStart,
+          endDate: prevEnd,
+          label: `${formatDateBR(prevStart)} (${prevWeekdayName})`
+        },
+        isSingleDay: true,
+        isFullMonth: false,
+        currentLabel: `${formatDateBR(start)} (${currentWeekdayName})`,
+        previousLabel: `${formatDateBR(prevStart)} (${prevWeekdayName})`,
+        modeDescription: `Mesmo dia do mês (dia ${targetDay})`,
+        targetDayOfWeekName: currentWeekdayName,
+        previousDayOfWeekName: prevWeekdayName
+      };
+    }
+  }
+
+  // Multi-day range (e.g. 01/10 to 06/10)
+  const startDay = Math.min(start.getDate(), maxDaysInPrevMonth);
+  const endDay = Math.min(end.getDate(), maxDaysInPrevMonth);
+  const prevStart = startOfDay(new Date(prevYear, prevMonth, startDay));
+  const prevEnd = endOfDay(new Date(prevYear, prevMonth, endDay));
+
+  return {
+    previousRange: {
+      startDate: prevStart,
+      endDate: prevEnd,
+      label: `${formatDateBR(prevStart)} a ${formatDateBR(prevEnd)}`
+    },
+    isSingleDay: false,
+    isFullMonth: false,
+    currentLabel: `${formatDateBR(start)} a ${formatDateBR(end)}`,
+    previousLabel: `${formatDateBR(prevStart)} a ${formatDateBR(prevEnd)}`,
+    modeDescription: `Mesmo intervalo (${startDay} a ${endDay}/${String(prevMonth + 1).padStart(2, '0')})`
+  };
+};

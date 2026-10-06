@@ -34,7 +34,8 @@ import {
   Investment, 
   CashTransaction,
   SystemSettings,
-  DateRange
+  DateRange,
+  FixedCostPayment
 } from '../../types';
 import { formatCurrency, formatPercent, formatDate } from '../../lib/formatters';
 import { 
@@ -45,6 +46,7 @@ import {
   endOfDay, 
   getDefaultDateRange 
 } from '../../lib/dateUtils';
+import { getResolvedFixedCostsForPeriod } from '../../lib/fixedCostUtils';
 import { DateRangePicker } from '../common/DateRangePicker';
 
 interface PerformanceViewProps {
@@ -52,6 +54,7 @@ interface PerformanceViewProps {
   deliveries: Delivery[];
   payables: AccountsPayable[];
   fixedCosts?: FixedCost[];
+  fixedCostPayments?: FixedCostPayment[];
   shifts: FreelancerShift[];
   investments: Investment[];
   cashTransactions?: CashTransaction[];
@@ -117,6 +120,7 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({
   deliveries,
   payables,
   fixedCosts = [],
+  fixedCostPayments = [],
   shifts,
   investments,
   cashTransactions = [],
@@ -293,8 +297,8 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({
     const contributionMargin = netRevenue - totalVariableCosts;
     const contributionMarginPct = grossRevenue > 0 ? (contributionMargin / grossRevenue) * 100 : 0;
 
-    // 6. Fixed costs within range
-    const periodFixed = (fixedCosts || []).filter((fc) => isDateInRange(fc.due_date, range));
+    // 6. Fixed costs within range (recurring across all months from registration onward)
+    const periodFixed = getResolvedFixedCostsForPeriod(fixedCosts, fixedCostPayments, range);
     const fixedCostsTotal = periodFixed.reduce((acc, fc) => acc + Number(fc.amount || 0), 0);
 
     // 7. Investments within range
@@ -366,8 +370,8 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({
   }, [filterMode, currentRange, compMonth, compYear]);
 
   // Computed metrics for Reference and Comparison periods
-  const refMetrics = useMemo(() => computeMetricsForRange(activeRefRange), [orders, deliveries, payables, fixedCosts, shifts, investments, cashTransactions, activeRefRange]);
-  const compMetrics = useMemo(() => computeMetricsForRange(activeCompRange), [orders, deliveries, payables, fixedCosts, shifts, investments, cashTransactions, activeCompRange]);
+  const refMetrics = useMemo(() => computeMetricsForRange(activeRefRange), [orders, deliveries, payables, fixedCosts, fixedCostPayments, shifts, investments, cashTransactions, activeRefRange]);
+  const compMetrics = useMemo(() => computeMetricsForRange(activeCompRange), [orders, deliveries, payables, fixedCosts, fixedCostPayments, shifts, investments, cashTransactions, activeCompRange]);
 
   // Comparison helpers
   const calcDiff = (current: number, previous: number) => {
@@ -404,7 +408,7 @@ export const PerformanceView: React.FC<PerformanceViewProps> = ({
         year: y
       };
     });
-  }, [orders, deliveries, payables, fixedCosts, shifts, investments, cashTransactions, selectedYear]);
+  }, [orders, deliveries, payables, fixedCosts, fixedCostPayments, shifts, investments, cashTransactions, selectedYear]);
 
   // Annual Totals
   const annualTotals = useMemo(() => {

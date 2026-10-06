@@ -18,9 +18,11 @@ import {
   PendingIssue,
   DateRange,
   DateFilterCategory,
-  FixedCost
+  FixedCost,
+  FixedCostPayment
 } from './types';
 import { getDefaultDateRange } from './lib/dateUtils';
+import { getFixedCostsForSingleMonth } from './lib/fixedCostUtils';
 import { Sidebar, TabType } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { DashboardView } from './components/dashboard/DashboardView';
@@ -118,6 +120,7 @@ export const App: React.FC = () => {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [payables, setPayables] = useState<AccountsPayable[]>([]);
   const [fixedCosts, setFixedCosts] = useState<FixedCost[]>([]);
+  const [fixedCostPayments, setFixedCostPayments] = useState<FixedCostPayment[]>([]);
   const [freelancers, setFreelancers] = useState<Freelancer[]>([]);
   const [shifts, setShifts] = useState<FreelancerShift[]>([]);
   const [investments, setInvestments] = useState<Investment[]>([]);
@@ -157,9 +160,12 @@ export const App: React.FC = () => {
       const { data: pData } = await supabase.from('accounts_payable').select('*').order('due_date', { ascending: true });
       if (pData) setPayables(pData);
 
-      // 6.1. Fixed Costs (Custos Fixos)
+      // 6.1. Fixed Costs (Custos Fixos) & Payments
       const { data: fcData } = await supabase.from('fixed_costs').select('*').order('due_date', { ascending: true });
       if (fcData) setFixedCosts(fcData);
+
+      const { data: fcpData } = await supabase.from('fixed_cost_payments').select('*');
+      if (fcpData) setFixedCostPayments(fcpData);
 
       // 7. Freelancers & Shifts
       const { data: fData } = await supabase.from('freelancers').select('*').order('name');
@@ -224,12 +230,20 @@ export const App: React.FC = () => {
     return diffDays <= alertDaysLimit;
   }).length;
 
-  const fixedCostsAlertCount = fixedCosts.filter((fc) => {
-    if (fc.is_paid) return false;
-    const due = new Date(fc.due_date + 'T00:00:00');
-    const diffDays = Math.ceil((due.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
-    return diffDays <= alertDaysLimit;
-  }).length;
+  const fixedCostsAlertCount = (() => {
+    const currentMonthCosts = getFixedCostsForSingleMonth(
+      fixedCosts,
+      fixedCostPayments,
+      todayDate.getFullYear(),
+      todayDate.getMonth() + 1
+    );
+    return currentMonthCosts.filter((fc) => {
+      if (fc.is_paid) return false;
+      const due = new Date(fc.due_date + 'T00:00:00');
+      const diffDays = Math.ceil((due.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+      return diffDays <= alertDaysLimit;
+    }).length;
+  })();
 
   // Render isolated Clock-In view for Freelancers (Section 18 & 33)
   if (activeTab === 'clockin') {
@@ -290,6 +304,7 @@ export const App: React.FC = () => {
               closedDays={closedDays}
               settings={settings}
               fixedCosts={fixedCosts}
+              fixedCostPayments={fixedCostPayments}
               selectedMonth={categoryDateRanges.dashboard.startDate.getMonth() + 1}
               selectedYear={categoryDateRanges.dashboard.startDate.getFullYear()}
               dateRange={categoryDateRanges.dashboard}
@@ -309,6 +324,7 @@ export const App: React.FC = () => {
               deliveries={deliveries}
               payables={payables}
               fixedCosts={fixedCosts}
+              fixedCostPayments={fixedCostPayments}
               shifts={shifts}
               investments={investments}
               cashTransactions={cashTransactions}
@@ -369,6 +385,7 @@ export const App: React.FC = () => {
           {activeTab === 'fixed_costs' && (
             <FixedCostsView
               fixedCosts={fixedCosts}
+              fixedCostPayments={fixedCostPayments}
               onRefresh={fetchAllData}
               selectedMonth={categoryDateRanges.fixed_costs.startDate.getMonth() + 1}
               selectedYear={categoryDateRanges.fixed_costs.startDate.getFullYear()}

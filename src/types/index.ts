@@ -334,6 +334,20 @@ export interface FixedCost {
   notes?: string;
   created_at?: string;
   updated_at?: string;
+  payments?: FixedCostPayment[];
+}
+
+export interface FixedCostPayment {
+  id?: string;
+  fixed_cost_id: string;
+  year_month: string; // e.g. '2026-09', '2026-10'
+  is_paid: boolean;
+  paid_amount?: number;
+  payment_date?: string | null;
+  payment_method?: string | null;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export type DateFilterCategory = 
