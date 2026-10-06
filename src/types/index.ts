@@ -71,6 +71,8 @@ export interface CourierAdjustment {
   delivery_id?: string | null;
   order_number?: string | null;
   neighborhood_name?: string | null;
+  original_neighborhood?: string | null;
+  proposed_neighborhood?: string | null;
   original_fee: number;
   proposed_fee: number;
   notes?: string | null;

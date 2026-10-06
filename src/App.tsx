@@ -244,6 +244,7 @@ export const App: React.FC = () => {
       <CourierPortalView
         couriers={couriers}
         deliveries={deliveries}
+        neighborhoodRates={neighborhoodRates}
         onBackToMain={() => {
           window.location.hash = '';
           setIsCourierPortalRoute(false);

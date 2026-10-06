@@ -17,7 +17,7 @@ import {
   X,
   Send
 } from 'lucide-react';
-import { Courier, Delivery, CourierAdjustment } from '../../types';
+import { Courier, Delivery, CourierAdjustment, NeighborhoodRate } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
 import { getOperationalDateKey, formatDateBR } from '../../lib/dateUtils';
@@ -25,6 +25,7 @@ import { getOperationalDateKey, formatDateBR } from '../../lib/dateUtils';
 interface CourierPortalViewProps {
   couriers: Courier[];
   deliveries: Delivery[];
+  neighborhoodRates?: NeighborhoodRate[];
   onBackToMain?: () => void;
   onRefreshData?: () => void;
 }
@@ -32,6 +33,7 @@ interface CourierPortalViewProps {
 export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   couriers,
   deliveries,
+  neighborhoodRates = [],
   onBackToMain,
   onRefreshData
 }) => {
@@ -50,9 +52,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   });
   const [adjustments, setAdjustments] = useState<CourierAdjustment[]>([]);
   const [isLoadingAdjustments, setIsLoadingAdjustments] = useState<boolean>(false);
+  const [availableNeighborhoods, setAvailableNeighborhoods] = useState<NeighborhoodRate[]>(neighborhoodRates);
 
   // Modals for Courier Actions
   const [editingDelivery, setEditingDelivery] = useState<Delivery | null>(null);
+  const [proposedNeighborhood, setProposedNeighborhood] = useState<string>('');
   const [proposedFee, setProposedFee] = useState<string>('');
   const [editNote, setEditNote] = useState<string>('');
   const [isSubmittingEdit, setIsSubmittingEdit] = useState<boolean>(false);
@@ -88,6 +92,24 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       }
     }
   }, [couriers]);
+
+  // Load system neighborhood rates if not provided
+  useEffect(() => {
+    if (neighborhoodRates && neighborhoodRates.length > 0) {
+      setAvailableNeighborhoods(neighborhoodRates.filter((n) => n.is_active));
+    } else {
+      supabase
+        .from('neighborhood_rates')
+        .select('*')
+        .eq('is_active', true)
+        .order('name')
+        .then(({ data, error }) => {
+          if (!error && data) {
+            setAvailableNeighborhoods(data as NeighborhoodRate[]);
+          }
+        });
+    }
+  }, [neighborhoodRates]);
 
   // Handle Login Submission
   const handleLogin = (e?: React.FormEvent) => {
@@ -195,6 +217,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       return;
     }
 
+    const finalNeighborhood = (proposedNeighborhood || editingDelivery.neighborhood_name || '').trim();
+
     setIsSubmittingEdit(true);
     try {
       const { error } = await supabase.from('courier_adjustments').insert({
@@ -204,10 +228,12 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         type: 'edit_fee',
         delivery_id: editingDelivery.id,
         order_number: editingDelivery.order_number || editingDelivery.external_order_id,
-        neighborhood_name: editingDelivery.neighborhood_name || 'Bairro não especificado',
+        neighborhood_name: finalNeighborhood || 'Bairro não especificado',
+        original_neighborhood: editingDelivery.neighborhood_name || '',
+        proposed_neighborhood: finalNeighborhood,
         original_fee: Number(editingDelivery.courier_fee || 0),
         proposed_fee: proposed,
-        notes: editNote.trim() || 'Ajuste de taxa solicitado pelo motoboy',
+        notes: editNote.trim() || (finalNeighborhood !== editingDelivery.neighborhood_name ? `Bairro alterado para ${finalNeighborhood}` : 'Ajuste de taxa solicitado pelo motoboy'),
         status: 'pending'
       });
 
@@ -215,6 +241,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
       showToast('Solicitação de ajuste enviada! Aguardando conferência do restaurante.');
       setEditingDelivery(null);
+      setProposedNeighborhood('');
       setProposedFee('');
       setEditNote('');
       fetchAdjustments();
@@ -931,6 +958,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   <button
                     onClick={() => {
                       setEditingDelivery(delivery);
+                      setProposedNeighborhood(delivery.neighborhood_name || '');
                       setProposedFee(String(delivery.courier_fee || 8.00));
                       setEditNote('');
                     }}
@@ -949,7 +977,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     }}
                   >
                     <Edit3 size={13} />
-                    <span>Ajustar Taxa</span>
+                    <span>Ajustar Bairro / Taxa</span>
                   </button>
                 </div>
               </div>
@@ -1027,7 +1055,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: '#F8FAFC' }}>
-                Ajustar Taxa da Corrida
+                Ajustar Bairro / Taxa da Corrida
               </h3>
               <button
                 onClick={() => setEditingDelivery(null)}
@@ -1039,14 +1067,54 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
             <div style={{ backgroundColor: '#0F172A', padding: '12px', borderRadius: '10px', marginBottom: '16px', fontSize: '0.85rem' }}>
               <div style={{ color: '#94A3B8' }}>Pedido: <strong style={{ color: '#F8FAFC' }}>#{editingDelivery.order_number || editingDelivery.external_order_id}</strong></div>
-              <div style={{ color: '#94A3B8', marginTop: '4px' }}>Bairro: <strong style={{ color: '#F8FAFC' }}>{editingDelivery.neighborhood_name}</strong></div>
+              <div style={{ color: '#94A3B8', marginTop: '4px' }}>Bairro Atual: <strong style={{ color: '#F8FAFC' }}>{editingDelivery.neighborhood_name || 'Não informado'}</strong></div>
               <div style={{ color: '#94A3B8', marginTop: '4px' }}>Taxa Atual no Sistema: <strong style={{ color: '#34D399' }}>{formatCurrency(editingDelivery.courier_fee)}</strong></div>
             </div>
 
             <form onSubmit={handleSubmitEditFee}>
+              {/* Bairro Selector */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
+                  Bairro Correto da Entrega *
+                </label>
+                <select
+                  value={proposedNeighborhood}
+                  onChange={(e) => {
+                    const selName = e.target.value;
+                    setProposedNeighborhood(selName);
+                    const matched = availableNeighborhoods.find(n => n.name.trim().toLowerCase() === selName.trim().toLowerCase());
+                    if (matched) {
+                      setProposedFee(String(matched.total_rate));
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '12px 14px',
+                    backgroundColor: '#0F172A',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '10px',
+                    color: '#F8FAFC',
+                    fontSize: '0.95rem',
+                    outline: 'none',
+                    cursor: 'pointer'
+                  }}
+                  required
+                >
+                  <option value="">Selecione o bairro da entrega...</option>
+                  {availableNeighborhoods.map((n) => (
+                    <option key={n.id} value={n.name}>
+                      {n.name} (Taxa: {formatCurrency(n.total_rate)})
+                    </option>
+                  ))}
+                </select>
+                <span style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '4px', display: 'block' }}>
+                  Ao escolher o bairro, a taxa do sistema é preenchida automaticamente.
+                </span>
+              </div>
+
               <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
-                  Qual valor correto da taxa? (R$) *
+                  Valor da Taxa (R$) *
                 </label>
                 <input
                   type="text"
@@ -1066,7 +1134,6 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     boxSizing: 'border-box'
                   }}
                   required
-                  autoFocus
                 />
               </div>
 
@@ -1204,11 +1271,16 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
                   Bairro da Entrega *
                 </label>
-                <input
-                  type="text"
+                <select
                   value={newNeighborhood}
-                  onChange={(e) => setNewNeighborhood(e.target.value)}
-                  placeholder="Ex: Centro, Cohab, Jardim Campestre..."
+                  onChange={(e) => {
+                    const selName = e.target.value;
+                    setNewNeighborhood(selName);
+                    const matched = availableNeighborhoods.find(n => n.name.trim().toLowerCase() === selName.trim().toLowerCase());
+                    if (matched) {
+                      setNewFee(String(matched.total_rate));
+                    }
+                  }}
                   style={{
                     width: '100%',
                     padding: '12px 14px',
@@ -1218,10 +1290,17 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     color: '#F8FAFC',
                     fontSize: '0.95rem',
                     outline: 'none',
-                    boxSizing: 'border-box'
+                    cursor: 'pointer'
                   }}
                   required
-                />
+                >
+                  <option value="">Selecione o bairro da entrega...</option>
+                  {availableNeighborhoods.map((n) => (
+                    <option key={n.id} value={n.name}>
+                      {n.name} (Taxa: {formatCurrency(n.total_rate)})
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div style={{ marginBottom: '12px' }}>

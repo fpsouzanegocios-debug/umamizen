@@ -93,16 +93,18 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
         const baseRate = Number(currentDelivery?.base_rate || 8.00);
         const newFee = Number(adj.proposed_fee);
         const newAdditional = Math.max(0, newFee - baseRate);
+        const finalNeighborhood = (adj.proposed_neighborhood || adj.neighborhood_name || currentDelivery?.neighborhood_name || '').trim();
 
         // 1. Update the delivery record
         const { error: delError } = await supabase
           .from('deliveries')
           .update({
+            neighborhood_name: finalNeighborhood || currentDelivery?.neighborhood_name,
             courier_fee: newFee,
             additional_rate: newAdditional,
             neighborhood_total_rate: newFee,
             is_manually_edited: true,
-            notes: (currentDelivery?.notes ? currentDelivery.notes + ' | ' : '') + `Ajuste aprovado: R$ ${newFee.toFixed(2)} (${adj.notes || ''})`,
+            notes: (currentDelivery?.notes ? currentDelivery.notes + ' | ' : '') + `Ajuste aprovado: Bairro ${finalNeighborhood} - R$ ${newFee.toFixed(2)} (${adj.notes || ''})`,
             updated_at: new Date().toISOString()
           })
           .eq('id', adj.delivery_id);
@@ -211,15 +213,17 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           const baseRate = Number(currentDelivery?.base_rate || 8.00);
           const newFee = Number(adj.proposed_fee);
           const newAdditional = Math.max(0, newFee - baseRate);
+          const finalNeighborhood = (adj.proposed_neighborhood || adj.neighborhood_name || currentDelivery?.neighborhood_name || '').trim();
 
           await supabase
             .from('deliveries')
             .update({
+              neighborhood_name: finalNeighborhood || currentDelivery?.neighborhood_name,
               courier_fee: newFee,
               additional_rate: newAdditional,
               neighborhood_total_rate: newFee,
               is_manually_edited: true,
-              notes: (currentDelivery?.notes ? currentDelivery.notes + ' | ' : '') + `Ajuste aprovado: R$ ${newFee.toFixed(2)}`,
+              notes: (currentDelivery?.notes ? currentDelivery.notes + ' | ' : '') + `Ajuste aprovado: Bairro ${finalNeighborhood} - R$ ${newFee.toFixed(2)}`,
               updated_at: new Date().toISOString()
             })
             .eq('id', adj.delivery_id);
@@ -520,8 +524,16 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
                     <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: '0.9rem', marginTop: '2px' }}>
                       #{adj.order_number || 'S/N'}
                     </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                      {adj.neighborhood_name || 'Bairro informado'}
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                      {adj.original_neighborhood && adj.proposed_neighborhood && adj.original_neighborhood !== adj.proposed_neighborhood ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                          <span style={{ textDecoration: 'line-through', color: '#94A3B8' }}>{adj.original_neighborhood}</span>
+                          <span style={{ color: '#38BDF8' }}>➔</span>
+                          <span style={{ fontWeight: 700, color: '#38BDF8' }}>{adj.proposed_neighborhood}</span>
+                        </div>
+                      ) : (
+                        <span>{adj.proposed_neighborhood || adj.neighborhood_name || 'Bairro informado'}</span>
+                      )}
                     </div>
                   </div>
 
