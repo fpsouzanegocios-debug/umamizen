@@ -70,6 +70,9 @@ export interface CourierAdjustment {
   type: 'edit_fee' | 'new_delivery' | 'remove_delivery';
   delivery_id?: string | null;
   order_number?: string | null;
+  customer_name?: string | null;
+  received_cash?: number | null;
+  payment_method?: string | null;
   neighborhood_name?: string | null;
   original_neighborhood?: string | null;
   proposed_neighborhood?: string | null;

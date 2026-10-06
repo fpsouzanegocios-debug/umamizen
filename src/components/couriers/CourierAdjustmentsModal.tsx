@@ -12,10 +12,12 @@ import {
   Trash2, 
   Edit3, 
   Plus, 
-  DollarSign,
-  UserCheck
+  DollarSign, 
+  UserCheck, 
+  User, 
+  Banknote 
 } from 'lucide-react';
-import { CourierAdjustment, Delivery, Courier } from '../../types';
+import { CourierAdjustment, Delivery, Courier, Order } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
 import { formatDateBR } from '../../lib/dateUtils';
@@ -26,6 +28,7 @@ interface CourierAdjustmentsModalProps {
   onSuccess: () => void;
   couriers: Courier[];
   deliveries: Delivery[];
+  orders?: Order[];
 }
 
 export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = ({
@@ -33,7 +36,8 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
   onClose,
   onSuccess,
   couriers,
-  deliveries
+  deliveries,
+  orders = []
 }) => {
   const [adjustments, setAdjustments] = useState<CourierAdjustment[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -69,6 +73,35 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
     }
   }, [isOpen]);
 
+  // Fast map to find matching order and customer name
+  const ordersMap = useMemo(() => {
+    const map = new Map<string, Order>();
+    if (orders) {
+      orders.forEach((o) => {
+        if (o.external_order_id) map.set(o.external_order_id, o);
+        if (o.order_number) map.set(o.order_number, o);
+        if (o.id) map.set(o.id, o);
+      });
+    }
+    return map;
+  }, [orders]);
+
+  const getCustomerName = (adj: CourierAdjustment): string | null => {
+    if (adj.customer_name) return adj.customer_name;
+    if (adj.delivery_id) {
+      const del = deliveries.find(d => d.id === adj.delivery_id);
+      if (del) {
+        const order = ordersMap.get(del.external_order_id) || (del.order_number ? ordersMap.get(del.order_number) : undefined);
+        if (order?.customer_name) return order.customer_name;
+      }
+    }
+    if (adj.order_number) {
+      const order = ordersMap.get(adj.order_number);
+      if (order?.customer_name) return order.customer_name;
+    }
+    return null;
+  };
+
   // Filtered adjustments
   const filteredAdjustments = useMemo(() => {
     return adjustments.filter((adj) => {
@@ -95,21 +128,38 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
         const newAdditional = Math.max(0, newFee - baseRate);
         const finalNeighborhood = (adj.proposed_neighborhood || adj.neighborhood_name || currentDelivery?.neighborhood_name || '').trim();
 
+        const updatePayload: any = {
+          neighborhood_name: finalNeighborhood || currentDelivery?.neighborhood_name,
+          courier_fee: newFee,
+          additional_rate: newAdditional,
+          neighborhood_total_rate: newFee,
+          is_manually_edited: true,
+          notes: (currentDelivery?.notes ? currentDelivery.notes + ' | ' : '') + `Ajuste aprovado: Bairro ${finalNeighborhood} - R$ ${newFee.toFixed(2)} (${adj.notes || ''})`,
+          updated_at: new Date().toISOString()
+        };
+
+        if (adj.received_cash) {
+          updatePayload.payment_method = 'Dinheiro';
+          updatePayload.order_amount = Number(adj.received_cash);
+        } else if (adj.payment_method) {
+          updatePayload.payment_method = adj.payment_method;
+        }
+
         // 1. Update the delivery record
         const { error: delError } = await supabase
           .from('deliveries')
-          .update({
-            neighborhood_name: finalNeighborhood || currentDelivery?.neighborhood_name,
-            courier_fee: newFee,
-            additional_rate: newAdditional,
-            neighborhood_total_rate: newFee,
-            is_manually_edited: true,
-            notes: (currentDelivery?.notes ? currentDelivery.notes + ' | ' : '') + `Ajuste aprovado: Bairro ${finalNeighborhood} - R$ ${newFee.toFixed(2)} (${adj.notes || ''})`,
-            updated_at: new Date().toISOString()
-          })
+          .update(updatePayload)
           .eq('id', adj.delivery_id);
 
         if (delError) throw delError;
+
+        // If payment method changed to cash, update order final_payment_method
+        if ((adj.payment_method === 'Dinheiro' || adj.received_cash) && currentDelivery?.external_order_id) {
+          await supabase
+            .from('orders')
+            .update({ final_payment_method: 'Dinheiro' })
+            .eq('external_order_id', currentDelivery.external_order_id);
+        }
 
       } else if (adj.type === 'new_delivery') {
         // Insert a new delivery record
@@ -130,6 +180,8 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
             additional_rate: additionalRate,
             courier_fee: proposedFee,
             neighborhood_total_rate: proposedFee,
+            order_amount: adj.received_cash ? Number(adj.received_cash) : 0,
+            payment_method: adj.payment_method || (adj.received_cash ? 'Dinheiro' : 'Cartão / App'),
             status: 'delivered',
             is_manually_edited: true,
             notes: `Corrida adicionada pelo motoboy e aprovada: ${adj.notes || ''}`
@@ -431,6 +483,7 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
             const isRejected = adj.status === 'rejected';
 
             const diff = Number(adj.proposed_fee) - Number(adj.original_fee);
+            const customerName = getCustomerName(adj);
 
             return (
               <div
@@ -520,11 +573,39 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
                   marginBottom: '10px'
                 }}>
                   <div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Pedido / Bairro</div>
-                    <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: '0.9rem', marginTop: '2px' }}>
-                      #{adj.order_number || 'S/N'}
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Pedido / Cliente / Bairro</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '2px', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 800, color: '#F8FAFC', fontSize: '0.95rem' }}>
+                        #{adj.order_number || 'S/N'}
+                      </span>
+                      {customerName && (
+                        <span style={{ fontSize: '0.82rem', color: '#38BDF8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <User size={13} />
+                          <span>{customerName}</span>
+                        </span>
+                      )}
                     </div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+
+                    {adj.received_cash && (
+                      <div style={{
+                        marginTop: '4px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                        border: '1px solid rgba(245, 158, 11, 0.35)',
+                        padding: '2px 8px',
+                        borderRadius: '6px',
+                        fontSize: '0.75rem',
+                        color: '#FBBF24',
+                        fontWeight: 700
+                      }}>
+                        <Banknote size={13} />
+                        <span>Recebido em Dinheiro: {formatCurrency(adj.received_cash)}</span>
+                      </div>
+                    )}
+
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
                       {adj.original_neighborhood && adj.proposed_neighborhood && adj.original_neighborhood !== adj.proposed_neighborhood ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
                           <span style={{ textDecoration: 'line-through', color: '#94A3B8' }}>{adj.original_neighborhood}</span>

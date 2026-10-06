@@ -17,9 +17,13 @@ import {
   X,
   Send,
   Search,
-  ChevronDown
+  ChevronDown,
+  User,
+  Banknote,
+  CreditCard,
+  DollarSign
 } from 'lucide-react';
-import { Courier, Delivery, CourierAdjustment, NeighborhoodRate } from '../../types';
+import { Courier, Delivery, Order, CourierAdjustment, NeighborhoodRate } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
 import { getOperationalDateKey, formatDateBR } from '../../lib/dateUtils';
@@ -335,6 +339,7 @@ const SearchableNeighborhoodSelect: React.FC<SearchableNeighborhoodSelectProps> 
 interface CourierPortalViewProps {
   couriers: Courier[];
   deliveries: Delivery[];
+  orders?: Order[];
   neighborhoodRates?: NeighborhoodRate[];
   onBackToMain?: () => void;
   onRefreshData?: () => void;
@@ -343,6 +348,7 @@ interface CourierPortalViewProps {
 export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   couriers,
   deliveries,
+  orders = [],
   neighborhoodRates = [],
   onBackToMain,
   onRefreshData
@@ -364,17 +370,87 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [isLoadingAdjustments, setIsLoadingAdjustments] = useState<boolean>(false);
   const [availableNeighborhoods, setAvailableNeighborhoods] = useState<NeighborhoodRate[]>(neighborhoodRates);
 
+  // Orders State & Mapping for Customer Name & Payment Details
+  const [internalOrders, setInternalOrders] = useState<Order[]>(orders || []);
+
+  useEffect(() => {
+    if (orders && orders.length > 0) {
+      setInternalOrders(orders);
+    } else {
+      supabase
+        .from('orders')
+        .select('*')
+        .then(({ data, error }) => {
+          if (!error && data) {
+            setInternalOrders(data as Order[]);
+          }
+        });
+    }
+  }, [orders]);
+
+  const ordersMap = useMemo(() => {
+    const map = new Map<string, Order>();
+    internalOrders.forEach((o) => {
+      if (o.external_order_id) map.set(o.external_order_id, o);
+      if (o.order_number) map.set(o.order_number, o);
+      if (o.id) map.set(o.id, o);
+    });
+    return map;
+  }, [internalOrders]);
+
+  const getCustomerName = (delivery: Delivery): string => {
+    const order = ordersMap.get(delivery.external_order_id) || 
+                  (delivery.order_number ? ordersMap.get(delivery.order_number) : undefined) ||
+                  (delivery.order_id ? ordersMap.get(delivery.order_id) : undefined);
+    return order?.customer_name || 'Cliente Balcão / Avulso';
+  };
+
+  const getDeliveryPaymentInfo = (delivery: Delivery) => {
+    const order = ordersMap.get(delivery.external_order_id) || 
+                  (delivery.order_number ? ordersMap.get(delivery.order_number) : undefined);
+    
+    // Check if there is a pending or approved adjustment with cash
+    const adj = adjustments.find(a => a.delivery_id === delivery.id && a.status !== 'rejected');
+    if (adj && (adj.received_cash || adj.payment_method === 'Dinheiro')) {
+      return {
+        isCash: true,
+        amount: Number(adj.received_cash ?? delivery.order_amount ?? order?.gross_amount ?? 0),
+        methodName: 'Dinheiro (informado)',
+        hasAdjustment: true,
+        adjStatus: adj.status
+      };
+    }
+
+    const rawMethod = delivery.payment_method || order?.final_payment_method || order?.original_payment_method || '';
+    const norm = rawMethod.toLowerCase();
+    const isCash = norm.includes('dinheiro') || norm === 'cash';
+    const amount = Number(delivery.order_amount ?? order?.gross_amount ?? 0);
+
+    return {
+      isCash,
+      amount: isCash ? amount : 0,
+      methodName: rawMethod || 'Não informado',
+      hasAdjustment: false,
+      adjStatus: null
+    };
+  };
+
   // Modals for Courier Actions
   const [editingDelivery, setEditingDelivery] = useState<Delivery | null>(null);
   const [proposedNeighborhood, setProposedNeighborhood] = useState<string>('');
   const [proposedFee, setProposedFee] = useState<string>('');
   const [editNote, setEditNote] = useState<string>('');
+  const [isCashPayment, setIsCashPayment] = useState<boolean>(false);
+  const [cashAmount, setCashAmount] = useState<string>('');
   const [isSubmittingEdit, setIsSubmittingEdit] = useState<boolean>(false);
 
   const [showAddDeliveryModal, setShowAddDeliveryModal] = useState<boolean>(false);
   const [newOrderNumber, setNewOrderNumber] = useState<string>('');
+  const [newCustomerName, setNewCustomerName] = useState<string>('');
   const [newNeighborhood, setNewNeighborhood] = useState<string>('');
   const [newFee, setNewFee] = useState<string>('8.00');
+  const [newIsCash, setNewIsCash] = useState<boolean>(false);
+  const [newCashAmount, setNewCashAmount] = useState<string>('');
   const [newNote, setNewNote] = useState<string>('');
   const [isSubmittingNew, setIsSubmittingNew] = useState<boolean>(false);
 
@@ -508,15 +584,56 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     return adjustments.filter((a) => a.date === selectedDate);
   }, [adjustments, selectedDate]);
 
-  // Deliveries total fee calculation (taking into account approved adjustments)
+  const isDaniel = authenticatedCourier?.name.toLowerCase().includes('daniel') || false;
+
+  // Deliveries total fee calculation, cash retention and daily net settlement
   const stats = useMemo(() => {
     const totalCount = courierDeliveries.length;
     const totalFee = courierDeliveries.reduce((sum, d) => sum + Number(d.courier_fee || 0), 0);
     const pendingCount = dayAdjustments.filter((a) => a.status === 'pending').length;
-    return { totalCount, totalFee, pendingCount };
-  }, [courierDeliveries, dayAdjustments]);
 
-  // Submit Rate Edit
+    let totalCashCollected = 0;
+    courierDeliveries.forEach((d) => {
+      const pInfo = getDeliveryPaymentInfo(d);
+      if (pInfo.isCash) {
+        totalCashCollected += pInfo.amount;
+      }
+    });
+
+    // Also include new_delivery adjustments with reported cash
+    dayAdjustments.forEach((adj) => {
+      if (adj.type === 'new_delivery' && adj.status !== 'rejected' && adj.received_cash) {
+        totalCashCollected += Number(adj.received_cash);
+      }
+    });
+
+    const netBalance = totalFee - totalCashCollected;
+
+    return { 
+      totalCount, 
+      totalFee, 
+      pendingCount, 
+      totalCashCollected, 
+      netBalance 
+    };
+  }, [courierDeliveries, dayAdjustments, internalOrders, adjustments]);
+
+  // Open Edit Modal with optional cash highlight
+  const handleOpenEdit = (delivery: Delivery, forceCash = false) => {
+    setEditingDelivery(delivery);
+    setProposedNeighborhood(delivery.neighborhood_name || '');
+    setProposedFee(String(delivery.courier_fee || 8.00));
+    setEditNote('');
+
+    const pInfo = getDeliveryPaymentInfo(delivery);
+    const order = ordersMap.get(delivery.external_order_id) || (delivery.order_number ? ordersMap.get(delivery.order_number) : undefined);
+    const defAmount = delivery.order_amount || order?.gross_amount || 0;
+
+    setIsCashPayment(forceCash ? true : pInfo.isCash);
+    setCashAmount(pInfo.isCash && pInfo.amount > 0 ? String(pInfo.amount) : (defAmount > 0 ? String(defAmount) : ''));
+  };
+
+  // Submit Rate / Payment Edit
   const handleSubmitEditFee = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingDelivery || !authenticatedCourier) return;
@@ -528,6 +645,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     }
 
     const finalNeighborhood = (proposedNeighborhood || editingDelivery.neighborhood_name || '').trim();
+    const finalCustName = getCustomerName(editingDelivery);
+    const parsedCash = isCashPayment ? parseFloat(cashAmount.replace(',', '.')) : null;
 
     setIsSubmittingEdit(true);
     try {
@@ -538,12 +657,15 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         type: 'edit_fee',
         delivery_id: editingDelivery.id,
         order_number: editingDelivery.order_number || editingDelivery.external_order_id,
+        customer_name: finalCustName,
+        received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
+        payment_method: isCashPayment ? 'Dinheiro' : null,
         neighborhood_name: finalNeighborhood || 'Bairro não especificado',
         original_neighborhood: editingDelivery.neighborhood_name || '',
         proposed_neighborhood: finalNeighborhood,
         original_fee: Number(editingDelivery.courier_fee || 0),
         proposed_fee: proposed,
-        notes: editNote.trim() || (finalNeighborhood !== editingDelivery.neighborhood_name ? `Bairro alterado para ${finalNeighborhood}` : 'Ajuste de taxa solicitado pelo motoboy'),
+        notes: editNote.trim() || (isCashPayment ? `Informado pagamento em dinheiro: R$ ${parsedCash || 0}` : (finalNeighborhood !== editingDelivery.neighborhood_name ? `Bairro alterado para ${finalNeighborhood}` : 'Ajuste de taxa solicitado pelo motoboy')),
         status: 'pending'
       });
 
@@ -554,6 +676,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       setProposedNeighborhood('');
       setProposedFee('');
       setEditNote('');
+      setIsCashPayment(false);
+      setCashAmount('');
       fetchAdjustments();
     } catch (err: any) {
       alert('Erro ao enviar solicitação: ' + err.message);
@@ -573,6 +697,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       return;
     }
 
+    const parsedCash = newIsCash ? parseFloat(newCashAmount.replace(',', '.')) : null;
+
     setIsSubmittingNew(true);
     try {
       const { error } = await supabase.from('courier_adjustments').insert({
@@ -582,10 +708,13 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         type: 'new_delivery',
         delivery_id: null,
         order_number: newOrderNumber.trim() || 'AVULSO',
+        customer_name: newCustomerName.trim() || null,
+        received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
+        payment_method: newIsCash ? 'Dinheiro' : null,
         neighborhood_name: newNeighborhood.trim() || 'Bairro a confirmar',
         original_fee: 0,
         proposed_fee: fee,
-        notes: newNote.trim() || 'Corrida faltante adicionada pelo motoboy',
+        notes: newNote.trim() || (newIsCash ? `Corrida avulsa com dinheiro recebido: R$ ${parsedCash || 0}` : 'Corrida faltante adicionada pelo motoboy'),
         status: 'pending'
       });
 
@@ -594,8 +723,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       showToast('Corrida faltante enviada! Aguardando confirmação do restaurante.');
       setShowAddDeliveryModal(false);
       setNewOrderNumber('');
+      setNewCustomerName('');
       setNewNeighborhood('');
       setNewFee('8.00');
+      setNewIsCash(false);
+      setNewCashAmount('');
       setNewNote('');
       fetchAdjustments();
     } catch (err: any) {
@@ -1015,7 +1147,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
           display: 'grid',
           gridTemplateColumns: 'repeat(3, 1fr)',
           gap: '10px',
-          marginBottom: '20px'
+          marginBottom: (stats.totalCashCollected > 0 || isDaniel) ? '10px' : '20px'
         }}>
           <div style={{ backgroundColor: '#1E293B', borderRadius: '12px', padding: '14px 12px', textAlign: 'center', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
             <div style={{ fontSize: '0.72rem', color: '#94A3B8', fontWeight: 600 }}>Entregas</div>
@@ -1030,19 +1162,73 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#34D399', marginTop: '4px' }}>
               {formatCurrency(stats.totalFee)}
             </div>
-            <div style={{ fontSize: '0.7rem', color: '#64748B' }}>a receber</div>
+            <div style={{ fontSize: '0.7rem', color: '#64748B' }}>bruto das corridas</div>
           </div>
 
-          <div style={{ backgroundColor: '#1E293B', borderRadius: '12px', padding: '14px 12px', textAlign: 'center', border: '1px solid rgba(255, 255, 255, 0.05)' }}>
-            <div style={{ fontSize: '0.72rem', color: '#94A3B8', fontWeight: 600 }}>Em Conferência</div>
-            <div style={{ fontSize: '1.4rem', fontWeight: 800, color: stats.pendingCount > 0 ? '#FBBF24' : '#64748B', marginTop: '4px' }}>
-              {stats.pendingCount}
+          <div style={{
+            backgroundColor: '#1E293B',
+            borderRadius: '12px',
+            padding: '14px 12px',
+            textAlign: 'center',
+            border: stats.totalCashCollected > 0 ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid rgba(255, 255, 255, 0.05)'
+          }}>
+            <div style={{ fontSize: '0.72rem', color: stats.totalCashCollected > 0 ? '#FBBF24' : '#94A3B8', fontWeight: 600 }}>Dinheiro Retido</div>
+            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: stats.totalCashCollected > 0 ? '#FBBF24' : '#64748B', marginTop: '4px' }}>
+              {formatCurrency(stats.totalCashCollected)}
             </div>
-            <div style={{ fontSize: '0.7rem', color: stats.pendingCount > 0 ? '#FBBF24' : '#64748B' }}>
-              {stats.pendingCount > 0 ? 'aguardando OK' : 'tudo certo'}
+            <div style={{ fontSize: '0.7rem', color: stats.totalCashCollected > 0 ? '#FBBF24' : '#64748B' }}>
+              {stats.totalCashCollected > 0 ? 'em mãos (clientes)' : 'sem dinheiro'}
             </div>
           </div>
         </div>
+
+        {/* Settlement Banner: Acerto do Dia com Daniel / Motoboy */}
+        {(stats.totalCashCollected > 0 || isDaniel) && (
+          <div style={{
+            backgroundColor: stats.netBalance >= 0 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.12)',
+            border: stats.netBalance >= 0 ? '1px solid rgba(16, 185, 129, 0.35)' : '1px solid rgba(239, 68, 68, 0.4)',
+            borderRadius: '12px',
+            padding: '14px 16px',
+            marginBottom: '20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{
+                width: '38px',
+                height: '38px',
+                borderRadius: '10px',
+                backgroundColor: stats.netBalance >= 0 ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                color: stats.netBalance >= 0 ? '#34D399' : '#FB7185',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <Banknote size={20} />
+              </div>
+              <div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: stats.netBalance >= 0 ? '#34D399' : '#FB7185', letterSpacing: '0.5px' }}>
+                  {stats.netBalance >= 0 ? 'Líquido a Receber do Restaurante' : 'Você deve Repassar ao Restaurante'}
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#94A3B8', marginTop: '2px' }}>
+                  Taxas ({formatCurrency(stats.totalFee)}) - Dinheiro Retido ({formatCurrency(stats.totalCashCollected)})
+                </div>
+              </div>
+            </div>
+
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '1.4rem', fontWeight: 900, color: stats.netBalance >= 0 ? '#34D399' : '#FB7185' }}>
+                {formatCurrency(Math.abs(stats.netBalance))}
+              </div>
+              <span style={{ fontSize: '0.7rem', color: stats.netBalance >= 0 ? '#34D399' : '#FB7185', fontWeight: 600 }}>
+                {stats.netBalance >= 0 ? 'Saldo a seu favor' : 'Valor a devolver'}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Action Button: Add Missing Delivery */}
         <div style={{ marginBottom: '18px' }}>
@@ -1145,10 +1331,10 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
               >
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                       <span style={{
                         fontWeight: 800,
-                        fontSize: '0.95rem',
+                        fontSize: '0.98rem',
                         color: '#F8FAFC'
                       }}>
                         #{delivery.order_number || delivery.external_order_id || `${index + 1}`}
@@ -1158,10 +1344,71 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                       </span>
                     </div>
 
+                    {/* Customer Name */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      marginTop: '4px',
+                      color: '#38BDF8',
+                      fontSize: '0.88rem',
+                      fontWeight: 600
+                    }}>
+                      <User size={14} style={{ flexShrink: 0, color: '#38BDF8' }} />
+                      <span style={{
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        maxWidth: '260px'
+                      }}>
+                        {getCustomerName(delivery)}
+                      </span>
+                    </div>
+
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', color: '#CBD5E1', fontSize: '0.85rem' }}>
                       <MapPin size={14} color="#F43F5E" />
                       <span>{delivery.neighborhood_name || 'Bairro Centro'}</span>
                     </div>
+
+                    {/* Payment Info */}
+                    {(() => {
+                      const pInfo = getDeliveryPaymentInfo(delivery);
+                      return (
+                        <div style={{ marginTop: '6px' }}>
+                          {pInfo.isCash ? (
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                              border: '1px solid rgba(245, 158, 11, 0.4)',
+                              borderRadius: '6px',
+                              padding: '3px 8px',
+                              fontSize: '0.78rem',
+                              color: '#FBBF24',
+                              fontWeight: 700
+                            }}>
+                              <Banknote size={14} />
+                              <span>Dinheiro Retido: {formatCurrency(pInfo.amount)}</span>
+                            </span>
+                          ) : (
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                              borderRadius: '6px',
+                              padding: '2px 8px',
+                              fontSize: '0.74rem',
+                              color: '#94A3B8'
+                            }}>
+                              <CreditCard size={12} />
+                              <span>{pInfo.methodName || 'Cartão / App'}</span>
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   <div style={{ textAlign: 'right' }}>
@@ -1241,7 +1488,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   gap: '8px',
                   marginTop: '10px',
                   paddingTop: '8px',
-                  borderTop: '1px solid rgba(255, 255, 255, 0.05)'
+                  borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+                  flexWrap: 'wrap'
                 }}>
                   <button
                     onClick={() => {
@@ -1266,12 +1514,28 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   </button>
 
                   <button
-                    onClick={() => {
-                      setEditingDelivery(delivery);
-                      setProposedNeighborhood(delivery.neighborhood_name || '');
-                      setProposedFee(String(delivery.courier_fee || 8.00));
-                      setEditNote('');
+                    onClick={() => handleOpenEdit(delivery, true)}
+                    style={{
+                      backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                      border: '1px solid rgba(245, 158, 11, 0.3)',
+                      borderRadius: '8px',
+                      color: '#FBBF24',
+                      fontSize: '0.76rem',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      padding: '6px 10px'
                     }}
+                    title="Informar ou alterar pagamento em dinheiro"
+                  >
+                    <Banknote size={13} />
+                    <span>{getDeliveryPaymentInfo(delivery).isCash ? 'Editar Dinheiro' : 'Recebeu Dinheiro?'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleOpenEdit(delivery, false)}
                     style={{
                       backgroundColor: 'rgba(255, 255, 255, 0.08)',
                       border: '1px solid rgba(255, 255, 255, 0.12)',
@@ -1377,8 +1641,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
               </button>
             </div>
 
-            <div style={{ backgroundColor: '#0F172A', padding: '12px', borderRadius: '10px', marginBottom: '16px', fontSize: '0.85rem' }}>
+            <div style={{ backgroundColor: '#0F172A', padding: '14px', borderRadius: '12px', marginBottom: '16px', fontSize: '0.85rem' }}>
               <div style={{ color: '#94A3B8' }}>Pedido: <strong style={{ color: '#F8FAFC' }}>#{editingDelivery.order_number || editingDelivery.external_order_id}</strong></div>
+              <div style={{ color: '#94A3B8', marginTop: '4px' }}>Cliente: <strong style={{ color: '#38BDF8' }}>{getCustomerName(editingDelivery)}</strong></div>
               <div style={{ color: '#94A3B8', marginTop: '4px' }}>Bairro Atual: <strong style={{ color: '#F8FAFC' }}>{editingDelivery.neighborhood_name || 'Não informado'}</strong></div>
               <div style={{ color: '#94A3B8', marginTop: '4px' }}>Taxa Atual no Sistema: <strong style={{ color: '#34D399' }}>{formatCurrency(editingDelivery.courier_fee)}</strong></div>
             </div>
@@ -1406,7 +1671,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 </span>
               </div>
 
-              <div style={{ marginBottom: '14px' }}>
+              <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
                   Valor da Taxa (R$) *
                 </label>
@@ -1429,6 +1694,70 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   }}
                   required
                 />
+              </div>
+
+              {/* Opção de Pagamento em Dinheiro */}
+              <div style={{
+                backgroundColor: isCashPayment ? 'rgba(245, 158, 11, 0.1)' : 'rgba(255, 255, 255, 0.04)',
+                border: isCashPayment ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '12px',
+                padding: '14px',
+                marginBottom: '18px'
+              }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={isCashPayment}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setIsCashPayment(checked);
+                      if (checked && (!cashAmount || cashAmount === '0')) {
+                        const order = ordersMap.get(editingDelivery.external_order_id) || (editingDelivery.order_number ? ordersMap.get(editingDelivery.order_number) : undefined);
+                        const val = editingDelivery.order_amount || order?.gross_amount || 0;
+                        setCashAmount(val > 0 ? String(val) : '');
+                      }
+                    }}
+                    style={{ width: '18px', height: '18px', accentColor: '#F59E0B', marginTop: '2px', cursor: 'pointer' }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#F8FAFC' }}>
+                      💵 Cliente pagou em DINHEIRO na entrega?
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#94A3B8', marginTop: '2px' }}>
+                      Marque se o cliente trocou de cartão para dinheiro ou se você recebeu o valor em mãos.
+                    </div>
+                  </div>
+                </label>
+
+                {isCashPayment && (
+                  <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#FBBF24', marginBottom: '6px' }}>
+                      Valor do pedido recebido em dinheiro (R$) *
+                    </label>
+                    <input
+                      type="text"
+                      value={cashAmount}
+                      onChange={(e) => setCashAmount(e.target.value)}
+                      placeholder="Ex: 85,00"
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        backgroundColor: '#0F172A',
+                        border: '1px solid rgba(245, 158, 11, 0.4)',
+                        borderRadius: '8px',
+                        color: '#FBBF24',
+                        fontSize: '1.05rem',
+                        fontWeight: 800,
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                      required={isCashPayment}
+                    />
+                    <span style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '4px', display: 'block' }}>
+                      Esse valor será somado ao seu dinheiro retido e abatido do seu acerto diário.
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div style={{ marginBottom: '20px' }}>
@@ -1563,6 +1892,29 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 />
               </div>
 
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
+                  Nome do Cliente (se souber)
+                </label>
+                <input
+                  type="text"
+                  value={newCustomerName}
+                  onChange={(e) => setNewCustomerName(e.target.value)}
+                  placeholder="Ex: Mariana, Lucas..."
+                  style={{
+                    width: '100%',
+                    padding: '12px 14px',
+                    backgroundColor: '#0F172A',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '10px',
+                    color: '#F8FAFC',
+                    fontSize: '0.95rem',
+                    outline: 'none',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
               <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
                   Bairro da Entrega *
@@ -1584,7 +1936,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 </span>
               </div>
 
-              <div style={{ marginBottom: '12px' }}>
+              <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
                   Valor da Taxa (R$) *
                 </label>
@@ -1607,6 +1959,56 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   }}
                   required
                 />
+              </div>
+
+              {/* Opção de Pagamento em Dinheiro */}
+              <div style={{
+                backgroundColor: newIsCash ? 'rgba(245, 158, 11, 0.1)' : 'rgba(255, 255, 255, 0.04)',
+                border: newIsCash ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '12px',
+                padding: '12px 14px',
+                marginBottom: '16px'
+              }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={newIsCash}
+                    onChange={(e) => setNewIsCash(e.target.checked)}
+                    style={{ width: '18px', height: '18px', accentColor: '#F59E0B', cursor: 'pointer' }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#F8FAFC' }}>
+                      💵 Recebi o valor do pedido em DINHEIRO
+                    </div>
+                  </div>
+                </label>
+
+                {newIsCash && (
+                  <div style={{ marginTop: '10px', paddingTop: '8px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#FBBF24', marginBottom: '4px' }}>
+                      Valor recebido em dinheiro (R$) *
+                    </label>
+                    <input
+                      type="text"
+                      value={newCashAmount}
+                      onChange={(e) => setNewCashAmount(e.target.value)}
+                      placeholder="Ex: 75,00"
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        backgroundColor: '#0F172A',
+                        border: '1px solid rgba(245, 158, 11, 0.4)',
+                        borderRadius: '8px',
+                        color: '#FBBF24',
+                        fontSize: '1rem',
+                        fontWeight: 800,
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                      required={newIsCash}
+                    />
+                  </div>
+                )}
               </div>
 
               <div style={{ marginBottom: '20px' }}>
@@ -1702,8 +2104,16 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: '0 0 12px 0', color: '#FB7185' }}>
               Solicitar Remoção desta Corrida
             </h3>
+            
+            <div style={{ backgroundColor: '#0F172A', padding: '12px', borderRadius: '10px', marginBottom: '16px', fontSize: '0.85rem' }}>
+              <div style={{ color: '#94A3B8' }}>Pedido: <strong style={{ color: '#F8FAFC' }}>#{deletingDelivery.order_number || deletingDelivery.external_order_id}</strong></div>
+              <div style={{ color: '#94A3B8', marginTop: '4px' }}>Cliente: <strong style={{ color: '#38BDF8' }}>{getCustomerName(deletingDelivery)}</strong></div>
+              <div style={{ color: '#94A3B8', marginTop: '4px' }}>Bairro: <strong style={{ color: '#F8FAFC' }}>{deletingDelivery.neighborhood_name || 'Não informado'}</strong></div>
+              <div style={{ color: '#94A3B8', marginTop: '4px' }}>Taxa: <strong style={{ color: '#34D399' }}>{formatCurrency(deletingDelivery.courier_fee)}</strong></div>
+            </div>
+
             <p style={{ color: '#CBD5E1', fontSize: '0.85rem', margin: '0 0 16px 0' }}>
-              Você está informando que a entrega do pedido <strong>#{deletingDelivery.order_number || deletingDelivery.external_order_id}</strong> ({deletingDelivery.neighborhood_name}) não foi realizada por você.
+              Você está informando que a entrega deste pedido não foi realizada por você.
             </p>
 
             <form onSubmit={handleSubmitDeleteRequest}>

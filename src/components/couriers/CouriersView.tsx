@@ -1787,6 +1787,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
               <th>Data</th>
               <th>Nº Pedido</th>
               <th>Id Ext.</th>
+              <th>Cliente</th>
               <th>Entregador</th>
               <th>Bairro</th>
               <th>Tarifa Bairro</th>
@@ -1803,7 +1804,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
           <tbody>
             {filteredDeliveries.length === 0 ? (
               <tr>
-                <td colSpan={14} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                <td colSpan={15} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                   Nenhuma entrega registrada para este período.
                 </td>
               </tr>
@@ -1839,6 +1840,16 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                     </td>
                     <td style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                       {d.external_order_id}
+                    </td>
+                    <td>
+                      <div style={{ fontWeight: 600, color: '#F8FAFC', fontSize: '0.84rem' }}>
+                        {order?.customer_name || 'Balcão / Avulso'}
+                      </div>
+                      {order?.customer_phone && (
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                          {order.customer_phone}
+                        </div>
+                      )}
                     </td>
                     <td style={{ fontWeight: 600, color: '#38BDF8' }}>
                       {d.courier_name}
@@ -2307,6 +2318,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         }}
         couriers={couriers}
         deliveries={deliveries}
+        orders={orders}
       />
 
       {/* Portal do Motoboy: Link Sharing & PIN Management Modal */}
