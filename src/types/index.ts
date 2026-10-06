@@ -56,9 +56,28 @@ export interface Courier {
   name: string;
   phone?: string;
   pix_key?: string;
+  pin?: string;
   is_active: boolean;
   notes?: string;
   created_at: string;
+}
+
+export interface CourierAdjustment {
+  id: string;
+  courier_id: string;
+  courier_name: string;
+  date: string;
+  type: 'edit_fee' | 'new_delivery' | 'remove_delivery';
+  delivery_id?: string | null;
+  order_number?: string | null;
+  neighborhood_name?: string | null;
+  original_fee: number;
+  proposed_fee: number;
+  notes?: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+  reviewed_at?: string | null;
+  reviewed_by?: string | null;
 }
 
 export interface Order {

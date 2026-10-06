@@ -32,6 +32,8 @@ import { DateRangePicker } from '../common/DateRangePicker';
 import { DeliveryCreateModal } from './DeliveryCreateModal';
 import { CourierPaymentModal } from './CourierPaymentModal';
 import { ReconciliationDetailModal, ReconciliationModalType, ReconciliationItem } from './ReconciliationDetailModal';
+import { CourierAdjustmentsModal } from './CourierAdjustmentsModal';
+import { Smartphone, Key, Send, Copy, ExternalLink } from 'lucide-react';
 
 interface CouriersViewProps {
   couriers: Courier[];
@@ -67,6 +69,11 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   const [newCourierName, setNewCourierName] = useState<string>('');
   const [newCourierPhone, setNewCourierPhone] = useState<string>('');
   const [newCourierPix, setNewCourierPix] = useState<string>('');
+  const [newCourierPin, setNewCourierPin] = useState<string>('1234');
+  const [showAdjustmentsModal, setShowAdjustmentsModal] = useState<boolean>(false);
+  const [pendingAdjustmentsCount, setPendingAdjustmentsCount] = useState<number>(0);
+  const [showPortalShareModal, setShowPortalShareModal] = useState<boolean>(false);
+  const [editingCourierPin, setEditingCourierPin] = useState<{ id: string; name: string; pin: string } | null>(null);
   const [showAddDeliveryModal, setShowAddDeliveryModal] = useState<boolean>(false);
   const [editingDelivery, setEditingDelivery] = useState<Delivery | null>(null);
   const [editDeliveryRate, setEditDeliveryRate] = useState<number>(8.00);
@@ -106,6 +113,21 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       }
     } catch (err) {
       console.error('Falha ao consultar courier_daily_payments:', err);
+    }
+  };
+
+  // Fetch pending courier adjustment requests count
+  const fetchPendingAdjustmentsCount = async () => {
+    try {
+      const { count, error } = await supabase
+        .from('courier_adjustments')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'pending');
+      if (!error && count !== null) {
+        setPendingAdjustmentsCount(count);
+      }
+    } catch (err) {
+      console.error('Erro ao consultar ajustes de motoboys:', err);
     }
   };
 
@@ -241,6 +263,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
   useEffect(() => {
     fetchDailyPayments();
+    fetchPendingAdjustmentsCount();
   }, []);
 
   const handleConfirmDeleteDelivery = async () => {
@@ -577,6 +600,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         name: newCourierName.trim(),
         phone: newCourierPhone.trim() || null,
         pix_key: newCourierPix.trim() || null,
+        pin: newCourierPin.trim() || '1234',
         is_active: true
       });
 
@@ -585,6 +609,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       setNewCourierName('');
       setNewCourierPhone('');
       setNewCourierPix('');
+      setNewCourierPin('1234');
       setShowAddModal(false);
       onRefresh();
     } catch (err: any) {
@@ -733,13 +758,47 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             className="select"
             value={selectedCourierName}
             onChange={(e) => setSelectedCourierName(e.target.value)}
-            style={{ width: '200px' }}
+            style={{ width: '180px' }}
           >
             <option value="all">Todos os Motoboys</option>
             {couriers.map((c) => (
               <option key={c.id} value={c.name}>{c.name}</option>
             ))}
           </select>
+
+          {/* Pending Adjustments Button */}
+          {pendingAdjustmentsCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAdjustmentsModal(true)}
+              className="btn btn-primary"
+              style={{
+                backgroundColor: '#F59E0B',
+                borderColor: '#F59E0B',
+                color: '#0B0F19',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+              title="Ajustes de taxas e corridas solicitados pelos motoboys aguardando seu OK"
+            >
+              <UserCheck size={16} />
+              <span>Conferir Ajustes ({pendingAdjustmentsCount})</span>
+            </button>
+          )}
+
+          {/* Portal Share Button */}
+          <button
+            type="button"
+            onClick={() => setShowPortalShareModal(true)}
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            title="Abrir ou compartilhar link do Portal do Motoboy para celular"
+          >
+            <Smartphone size={16} color="#38BDF8" />
+            <span>Portal do Motoboy</span>
+          </button>
 
           <button 
             type="button"
@@ -758,6 +817,55 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Prominent Pending Adjustments Banner */}
+      {pendingAdjustmentsCount > 0 && (
+        <div style={{
+          backgroundColor: 'rgba(245, 158, 11, 0.1)',
+          border: '1px solid rgba(245, 158, 11, 0.4)',
+          borderRadius: '12px',
+          padding: '14px 18px',
+          marginBottom: '20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '10px',
+              backgroundColor: 'rgba(245, 158, 11, 0.2)',
+              color: '#FBBF24',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <AlertCircle size={22} />
+            </div>
+            <div>
+              <div style={{ fontWeight: 800, color: '#FBBF24', fontSize: '1rem' }}>
+                {pendingAdjustmentsCount} solicitação(ões) de motoboy aguardando sua conferência!
+              </div>
+              <div style={{ fontSize: '0.82rem', color: '#CBD5E1', marginTop: '2px' }}>
+                Os motoboys ajustaram taxas ou adicionaram corridas faltantes no portal deles. Confira os valores e dê o OK para atualizar o sistema.
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowAdjustmentsModal(true)}
+            className="btn btn-primary btn-sm"
+            style={{ backgroundColor: '#F59E0B', borderColor: '#F59E0B', color: '#0B0F19', fontWeight: 800, padding: '8px 16px' }}
+          >
+            <UserCheck size={16} />
+            <span>Conferir e Dar OK Agora</span>
+          </button>
+        </div>
+      )}
 
       {/* Grid: 1. Payment Summary + 2. Reconciliation Card */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginBottom: '24px' }}>
@@ -1844,6 +1952,20 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                   placeholder="CPF, Telefone ou Chave aleatória"
                 />
               </div>
+              <div className="form-group">
+                <label className="form-label">PIN de Acesso do Motoboy (4 dígitos)</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={newCourierPin}
+                  onChange={(e) => setNewCourierPin(e.target.value)}
+                  placeholder="1234"
+                  maxLength={6}
+                />
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  Código de segurança de 4 dígitos para o motoboy acessar o painel dele no celular
+                </span>
+              </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
                 <button type="button" onClick={() => setShowAddModal(false)} className="btn btn-secondary">
                   Cancelar
@@ -2172,6 +2294,224 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
           }
           selectedCourierName={selectedCourierName}
         />
+      )}
+
+      {/* Courier Adjustments Review & OK Modal */}
+      <CourierAdjustmentsModal
+        isOpen={showAdjustmentsModal}
+        onClose={() => setShowAdjustmentsModal(false)}
+        onSuccess={() => {
+          onRefresh();
+          fetchPendingAdjustmentsCount();
+          fetchDailyPayments();
+        }}
+        couriers={couriers}
+        deliveries={deliveries}
+      />
+
+      {/* Portal do Motoboy: Link Sharing & PIN Management Modal */}
+      {showPortalShareModal && (
+        <div className="modal-overlay" style={{ zIndex: 120 }}>
+          <div className="modal-content" style={{ maxWidth: '620px', width: '95%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '10px',
+                  backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                  color: '#38BDF8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Smartphone size={22} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.2rem', fontWeight: 800, margin: 0, color: '#F8FAFC' }}>
+                    Portal do Motoboy no Celular
+                  </h3>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: 0 }}>
+                    Compartilhe o link e gerencie os PINs de acesso dos seus entregadores
+                  </p>
+                </div>
+              </div>
+
+              <button onClick={() => setShowPortalShareModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Direct Link Box */}
+            <div style={{
+              backgroundColor: 'var(--bg-input)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '12px',
+              padding: '16px',
+              marginBottom: '20px'
+            }}>
+              <label style={{ fontSize: '0.78rem', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Link de Acesso para os Motoboys
+              </label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
+                <input
+                  type="text"
+                  readOnly
+                  value={`${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}#motoboy`}
+                  style={{
+                    flex: 1,
+                    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    color: '#38BDF8',
+                    fontSize: '0.85rem',
+                    fontFamily: 'monospace',
+                    outline: 'none'
+                  }}
+                />
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const link = `${window.location.origin}${window.location.pathname}#motoboy`;
+                    navigator.clipboard.writeText(link);
+                    alert('Link copiado para a área de transferência! Cole no WhatsApp dos motoboys.');
+                  }}
+                  className="btn btn-primary btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}
+                >
+                  <Copy size={14} />
+                  <span>Copiar Link</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const link = `${window.location.origin}${window.location.pathname}#motoboy`;
+                    window.open(link, '_blank');
+                  }}
+                  className="btn btn-secondary btn-sm"
+                  title="Testar portal em nova aba"
+                >
+                  <ExternalLink size={14} />
+                </button>
+              </div>
+              <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '8px 0 0 0' }}>
+                💡 <em>Dica:</em> No celular, o motoboy pode salvar esse link na tela inicial como um aplicativo!
+              </p>
+            </div>
+
+            {/* Active Couriers List with PINs */}
+            <div>
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#F8FAFC', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Entregadores Ativos e PINs de Acesso:</span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>PIN padrão: 1234</span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '240px', overflowY: 'auto' }}>
+                {couriers.filter(c => c.is_active).map((c) => {
+                  const portalLink = `${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}#motoboy`;
+                  const pin = c.pin || '1234';
+                  const cleanPhone = (c.phone || '').replace(/\D/g, '');
+                  const waMsg = encodeURIComponent(
+                    `Olá ${c.name}! Acesse o portal das suas entregas e taxas pelo link: ${portalLink}\nSeu PIN de acesso é: ${pin}`
+                  );
+                  const waUrl = cleanPhone ? `https://wa.me/55${cleanPhone}?text=${waMsg}` : `https://wa.me/?text=${waMsg}`;
+
+                  return (
+                    <div
+                      key={c.id}
+                      style={{
+                        backgroundColor: 'var(--bg-input)',
+                        borderRadius: '10px',
+                        padding: '10px 14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        border: '1px solid rgba(255, 255, 255, 0.05)'
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: '0.9rem' }}>
+                          {c.name}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          {c.phone || 'Sem telefone'} • PIX: {c.pix_key || 'Não cadastrado'}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {/* PIN badge and edit */}
+                        <div style={{
+                          backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          fontSize: '0.8rem',
+                          fontFamily: 'monospace',
+                          color: '#FBBF24',
+                          fontWeight: 700,
+                          border: '1px solid rgba(245, 158, 11, 0.3)'
+                        }}>
+                          PIN: {pin}
+                        </div>
+
+                        {/* Edit PIN button */}
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const newPin = prompt(`Novo PIN de 4 dígitos para ${c.name}:`, pin);
+                            if (newPin && newPin.trim()) {
+                              const { error } = await supabase
+                                .from('couriers')
+                                .update({ pin: newPin.trim() })
+                                .eq('id', c.id);
+                              if (error) {
+                                alert('Erro ao alterar PIN: ' + error.message);
+                              } else {
+                                onRefresh();
+                                alert(`PIN de ${c.name} alterado com sucesso para ${newPin.trim()}`);
+                              }
+                            }
+                          }}
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                          title="Alterar PIN do motoboy"
+                        >
+                          <Key size={12} />
+                          <span>Mudar</span>
+                        </button>
+
+                        {/* Send via WhatsApp button */}
+                        <a
+                          href={waUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '4px 8px', fontSize: '0.75rem', color: '#10B981', borderColor: 'rgba(16, 185, 129, 0.3)' }}
+                          title="Enviar link e PIN para o WhatsApp do motoboy"
+                        >
+                          <Send size={12} />
+                          <span>WhatsApp</span>
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setShowPortalShareModal(false)}
+                className="btn btn-secondary"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

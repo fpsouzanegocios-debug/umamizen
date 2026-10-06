@@ -33,6 +33,7 @@ import { PayablesView } from './components/payables/PayablesView';
 import { FixedCostsView } from './components/fixed_costs/FixedCostsView';
 import { FreelancersView } from './components/freelancers/FreelancersView';
 import { ClockInView } from './components/freelancers/ClockInView';
+import { CourierPortalView } from './components/couriers/CourierPortalView';
 import { InvestmentsView } from './components/investments/InvestmentsView';
 import { CashView } from './components/cash/CashView';
 import { GoalsView } from './components/goals/GoalsView';
@@ -202,14 +203,56 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  const [isCourierPortalRoute, setIsCourierPortalRoute] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const hash = window.location.hash.toLowerCase();
+    const search = window.location.search.toLowerCase();
+    return hash.includes('motoboy') || search.includes('motoboy');
+  });
+
+  useEffect(() => {
+    const handleUrlRouting = () => {
+      const hash = window.location.hash.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      if (hash.includes('motoboy') || search.includes('motoboy')) {
+        setIsCourierPortalRoute(true);
+        setActiveTab('courier_portal');
+      } else {
+        setIsCourierPortalRoute(false);
+        if (hash.includes('ponto') || search.includes('ponto')) {
+          setActiveTab('clockin');
+        }
+      }
+    };
+    handleUrlRouting();
+    window.addEventListener('hashchange', handleUrlRouting);
+    return () => window.removeEventListener('hashchange', handleUrlRouting);
+  }, []);
+
   useEffect(() => {
     document.title = 'Umami Zen - Gestão Financeira e Operacional';
-    if (currentUser) {
+    if (currentUser || isCourierPortalRoute) {
       fetchAllData();
     } else {
       setIsLoading(false);
     }
-  }, [currentUser, fetchAllData]);
+  }, [currentUser, isCourierPortalRoute, fetchAllData]);
+
+  // Se rota de motoboy ativa ou aba de motoboy selecionada, exibe o portal do entregador
+  if (isCourierPortalRoute || activeTab === 'courier_portal') {
+    return (
+      <CourierPortalView
+        couriers={couriers}
+        deliveries={deliveries}
+        onBackToMain={() => {
+          window.location.hash = '';
+          setIsCourierPortalRoute(false);
+          setActiveTab('couriers');
+        }}
+        onRefreshData={fetchAllData}
+      />
+    );
+  }
 
   // Se não estiver autenticado, exibe obrigatoriamente a tela de Login
   if (!currentUser) {

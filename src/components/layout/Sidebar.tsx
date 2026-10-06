@@ -31,7 +31,8 @@ export type TabType =
   | 'cash' 
   | 'goals' 
   | 'settings'
-  | 'clockin';
+  | 'clockin'
+  | 'courier_portal';
 
 interface SidebarProps {
   activeTab: TabType;
@@ -239,6 +240,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Clock size={16} />
             <span>Registrar Horário (Ponto)</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveTab('courier_portal');
+              setIsOpen(false);
+            }}
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              padding: '10px',
+              borderRadius: '8px',
+              backgroundColor: activeTab === 'courier_portal' ? '#F43F5E' : 'rgba(244, 63, 94, 0.12)',
+              color: activeTab === 'courier_portal' ? '#FFFFFF' : '#FB7185',
+              border: '1px solid rgba(244, 63, 94, 0.3)',
+              fontWeight: 600,
+              fontSize: '0.8rem',
+              cursor: 'pointer',
+            }}
+          >
+            <Bike size={16} />
+            <span>Portal do Motoboy (Celular)</span>
           </button>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
             <span>Status Supabase</span>
