@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   Bike, 
   Lock, 
@@ -387,56 +387,84 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   // Orders State & Mapping for Customer Name & Payment Details
   const [internalOrders, setInternalOrders] = useState<Order[]>(orders || []);
 
+  const fetchOrders = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .order('order_date', { ascending: false });
+      if (!error && data) {
+        setInternalOrders(data as Order[]);
+      }
+    } catch (e) {
+      console.error('Erro ao carregar pedidos:', e);
+    }
+  }, []);
+
   useEffect(() => {
     if (orders && orders.length > 0) {
       setInternalOrders(orders);
     } else {
-      supabase
-        .from('orders')
-        .select('*')
-        .then(({ data, error }) => {
-          if (!error && data) {
-            setInternalOrders(data as Order[]);
-          }
-        });
+      fetchOrders();
     }
-  }, [orders]);
+  }, [orders, fetchOrders]);
 
   const ordersMap = useMemo(() => {
     const map = new Map<string, Order>();
     internalOrders.forEach((o) => {
-      if (o.external_order_id) map.set(o.external_order_id, o);
-      if (o.order_number) map.set(o.order_number, o);
-      if (o.id) map.set(o.id, o);
+      if (o.external_order_id) {
+        map.set(String(o.external_order_id).trim(), o);
+        map.set(String(o.external_order_id).trim().toLowerCase(), o);
+      }
+      if (o.order_number) {
+        map.set(String(o.order_number).trim(), o);
+        map.set(String(o.order_number).trim().toLowerCase(), o);
+      }
+      if (o.id) {
+        map.set(String(o.id).trim(), o);
+      }
     });
     return map;
   }, [internalOrders]);
 
+  const getDeliveryOrder = useCallback((delivery: Delivery): Order | undefined => {
+    const extId = delivery.external_order_id ? String(delivery.external_order_id).trim() : '';
+    const ordNum = delivery.order_number ? String(delivery.order_number).trim() : '';
+    const ordId = delivery.order_id ? String(delivery.order_id).trim() : '';
+
+    return (extId ? ordersMap.get(extId) : undefined) ||
+           (ordNum ? ordersMap.get(ordNum) : undefined) ||
+           (ordId ? ordersMap.get(ordId) : undefined);
+  }, [ordersMap]);
+
   const getCustomerName = (delivery: Delivery): string => {
-    const order = ordersMap.get(delivery.external_order_id) || 
-                  (delivery.order_number ? ordersMap.get(delivery.order_number) : undefined) ||
-                  (delivery.order_id ? ordersMap.get(delivery.order_id) : undefined);
+    const order = getDeliveryOrder(delivery);
     return order?.customer_name || 'Cliente Balcão / Avulso';
   };
 
-  const getDeliveryPaymentInfo = (delivery: Delivery) => {
-    const order = ordersMap.get(delivery.external_order_id) || 
-                  (delivery.order_number ? ordersMap.get(delivery.order_number) : undefined);
+  const getDeliveryPaymentInfo = useCallback((delivery: Delivery) => {
+    const order = getDeliveryOrder(delivery);
     
     // Check if there is a pending or approved adjustment with cash
     const adj = adjustments.find(a => a.delivery_id === delivery.id && a.status !== 'rejected');
     if (adj && (adj.received_cash || adj.payment_method === 'Dinheiro')) {
+      const parsedAdjCash = Number(adj.received_cash);
       return {
         isCash: true,
-        amount: Number(adj.received_cash ?? delivery.order_amount ?? order?.gross_amount ?? 0),
+        amount: parsedAdjCash > 0 ? parsedAdjCash : Number(delivery.order_amount ?? order?.gross_amount ?? 0),
         methodName: 'Dinheiro (informado)',
         hasAdjustment: true,
         adjStatus: adj.status
       };
     }
 
-    const rawMethod = delivery.payment_method || order?.final_payment_method || order?.original_payment_method || '';
-    const norm = rawMethod.toLowerCase();
+    const rawMethod = delivery.payment_method || 
+                      order?.final_payment_method || 
+                      order?.original_payment_method || 
+                      (order as any)?.payment_method ||
+                      (order as any)?.original_imported_data?.['Forma de pagamento'] || 
+                      '';
+    const norm = String(rawMethod).toLowerCase();
     const isCash = norm.includes('dinheiro') || norm === 'cash';
     const amount = Number(delivery.order_amount ?? order?.gross_amount ?? 0);
 
@@ -447,7 +475,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       hasAdjustment: false,
       adjStatus: null
     };
-  };
+  }, [adjustments, getDeliveryOrder]);
 
   // Modals for Courier Actions
   const [editingDelivery, setEditingDelivery] = useState<Delivery | null>(null);
@@ -673,9 +701,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         const cashAdj = dayAdjs.find(a => a.delivery_id === d.id && a.status !== 'rejected' && a.received_cash);
         if (cashAdj) {
           dayCash += Number(cashAdj.received_cash);
-        } else if (d.payment_method?.toLowerCase() === 'dinheiro' || d.payment_method?.toLowerCase() === 'cash') {
-          const order = ordersMap.get(d.external_order_id) || (d.order_number ? ordersMap.get(d.order_number) : undefined);
-          dayCash += Number(d.order_amount ?? order?.gross_amount ?? 0);
+        } else {
+          const pInfo = getDeliveryPaymentInfo(d);
+          if (pInfo.isCash) {
+            dayCash += pInfo.amount;
+          }
         }
       });
       addedDeliveries.forEach(a => {
@@ -693,7 +723,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       const allDelsPaid = activeDeliveries.length > 0 && activeDeliveries.every(d => d.is_paid);
       const isPaid = Boolean(payRecord) || allDelsPaid;
 
-      if (payRecord?.retained_cash && Number(payRecord.retained_cash) > dayCash) {
+      if (payRecord?.retained_cash !== undefined && payRecord?.retained_cash !== null && Number(payRecord.retained_cash) > 0) {
         dayCash = Number(payRecord.retained_cash);
       }
 
@@ -713,8 +743,17 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     .filter(d => d.deliveriesCount > 0 || d.totalFees > 0 || d.retainedCash > 0 || d.isPaid)
     .sort((a, b) => b.date.localeCompare(a.date));
 
-    const unpaidDays = daysList.filter(d => !d.isPaid);
-    const paidDays = daysList.filter(d => d.isPaid);
+    const startTime = startOfDay(dateRange.startDate).getTime();
+    const endTime = endOfDay(dateRange.endDate).getTime();
+
+    // Days filtered strictly by the selected dateRange
+    const filteredDays = daysList.filter(d => {
+      const dTime = new Date(`${d.date}T12:00:00`).getTime();
+      return dTime >= startTime && dTime <= endTime;
+    });
+
+    const unpaidDays = filteredDays.filter(d => !d.isPaid);
+    const paidDays = filteredDays.filter(d => d.isPaid);
 
     const unpaidFeesTotal = unpaidDays.reduce((sum, d) => sum + d.totalFees, 0);
     const unpaidCashTotal = unpaidDays.reduce((sum, d) => sum + d.retainedCash, 0);
@@ -727,8 +766,18 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       return sum + d.netAmount;
     }, 0);
 
+    // Totals for all days in selected period
+    const periodTotalFees = filteredDays.reduce((sum, d) => sum + d.totalFees, 0);
+    const periodTotalCash = filteredDays.reduce((sum, d) => sum + d.retainedCash, 0);
+    const periodNetBalance = periodTotalFees - periodTotalCash;
+
+    // All-time unpaid count and balance for global context
+    const allTimeUnpaidDays = daysList.filter(d => !d.isPaid);
+    const allTimeUnpaidBalance = allTimeUnpaidDays.reduce((sum, d) => sum + d.netAmount, 0);
+
     return {
-      days: daysList,
+      days: filteredDays,
+      allDays: daysList,
       unpaidDays,
       paidDays,
       unpaidDaysCount: unpaidDays.length,
@@ -736,9 +785,14 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       unpaidCashTotal,
       accumulatedNetBalance,
       paidDaysCount: paidDays.length,
-      totalPaidAmount
+      totalPaidAmount,
+      periodTotalFees,
+      periodTotalCash,
+      periodNetBalance,
+      allTimeUnpaidCount: allTimeUnpaidDays.length,
+      allTimeUnpaidBalance
     };
-  }, [allCourierDeliveries, adjustments, dailyPayments, authenticatedCourier, ordersMap]);
+  }, [allCourierDeliveries, adjustments, dailyPayments, authenticatedCourier, getDeliveryPaymentInfo, dateRange]);
 
   // Filter deliveries belonging strictly to this courier within the selected dateRange
   const courierDeliveries = useMemo(() => {
@@ -1032,31 +1086,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
           boxShadow: '0 20px 40px rgba(0, 0, 0, 0.5)',
           position: 'relative'
         }}>
-          {onBackToMain && (
-            <button
-              onClick={onBackToMain}
-              style={{
-                position: 'absolute',
-                top: '20px',
-                left: '20px',
-                background: 'rgba(255, 255, 255, 0.06)',
-                border: 'none',
-                color: '#94A3B8',
-                borderRadius: '8px',
-                padding: '8px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                fontSize: '0.78rem'
-              }}
-            >
-              <ArrowLeft size={16} />
-              <span>Painel</span>
-            </button>
-          )}
-
-          <div style={{ textAlign: 'center', marginTop: onBackToMain ? '20px' : '0', marginBottom: '24px' }}>
+          <div style={{ textAlign: 'center', marginBottom: '24px' }}>
             <div style={{
               width: '64px',
               height: '64px',
@@ -1274,29 +1304,6 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {onBackToMain && (
-              <button
-                onClick={onBackToMain}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '8px',
-                  backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  color: '#94A3B8',
-                  fontSize: '0.78rem',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px'
-                }}
-                title="Voltar ao sistema gerencial"
-              >
-                <ArrowLeft size={14} />
-                <span>Painel</span>
-              </button>
-            )}
-
             <button
               onClick={handleLogout}
               style={{
@@ -1322,7 +1329,63 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       </header>
 
       <main style={{ maxWidth: '640px', margin: '0 auto', padding: '20px 16px' }}>
-        {/* Navigation Tabs: Corridas do Dia vs Extrato & Recebimentos */}
+        {/* Global Date Selector Bar with Standard System DateRangePicker */}
+        <div style={{
+          backgroundColor: '#1E293B',
+          borderRadius: '14px',
+          padding: '12px 16px',
+          marginBottom: '14px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px',
+          border: '1px solid rgba(255, 255, 255, 0.06)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94A3B8', fontSize: '0.85rem' }}>
+            <Calendar size={18} color="#F43F5E" />
+            <span style={{ fontWeight: 600, color: '#E2E8F0' }}>Período:</span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <DateRangePicker
+              value={dateRange}
+              onChange={(newRange) => {
+                setDateRange(newRange);
+                const s = newRange.startDate;
+                const dateStr = `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}-${String(s.getDate()).padStart(2, '0')}`;
+                setSelectedDate(dateStr);
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={() => {
+                fetchAdjustments();
+                fetchDailyPayments();
+                fetchOrders();
+                if (onRefreshData) onRefreshData();
+                showToast('Dados atualizados!');
+              }}
+              style={{
+                padding: '8px',
+                backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '8px',
+                color: '#CBD5E1',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+              title="Atualizar dados"
+            >
+              <RefreshCw size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* Navigation Tabs: Corridas vs Extrato */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: '1fr 1fr',
@@ -1330,7 +1393,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
           backgroundColor: '#1E293B',
           padding: '4px',
           borderRadius: '12px',
-          marginBottom: '18px'
+          marginBottom: '16px'
         }}>
           <button
             type="button"
@@ -1352,7 +1415,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             }}
           >
             <Bike size={16} />
-            <span>Corridas do Dia</span>
+            <span>Corridas ({courierDeliveries.length})</span>
           </button>
 
           <button
@@ -1375,7 +1438,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             }}
           >
             <Wallet size={16} />
-            <span>Extrato de Recebimento</span>
+            <span>Extrato ({receivablesHistory.days.length}d)</span>
             {receivablesHistory.unpaidDaysCount > 0 && (
               <span style={{
                 backgroundColor: activePortalTab === 'receivables' ? '#FFFFFF' : '#F59E0B',
@@ -1426,61 +1489,6 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 </div>
               </div>
             )}
-
-            {/* Date Selector Bar with Standard System DateRangePicker */}
-            <div style={{
-              backgroundColor: '#1E293B',
-              borderRadius: '14px',
-              padding: '12px 16px',
-              marginBottom: '18px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: '12px',
-              border: '1px solid rgba(255, 255, 255, 0.06)'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94A3B8', fontSize: '0.85rem' }}>
-                <Calendar size={18} color="#F43F5E" />
-                <span style={{ fontWeight: 600, color: '#E2E8F0' }}>Período do Fechamento:</span>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <DateRangePicker
-                  value={dateRange}
-                  onChange={(newRange) => {
-                    setDateRange(newRange);
-                    const s = newRange.startDate;
-                    const dateStr = `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}-${String(s.getDate()).padStart(2, '0')}`;
-                    setSelectedDate(dateStr);
-                  }}
-                />
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    fetchAdjustments();
-                    fetchDailyPayments();
-                    if (onRefreshData) onRefreshData();
-                    showToast('Dados atualizados!');
-                  }}
-                  style={{
-                    padding: '8px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    borderRadius: '8px',
-                    color: '#CBD5E1',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                  title="Atualizar dados"
-                >
-                  <RefreshCw size={16} />
-                </button>
-              </div>
-            </div>
 
         {/* Financial KPI Summary Cards */}
         <div style={{
@@ -2076,13 +2084,13 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   <div>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: '#F8FAFC' }}>
                       {receivablesHistory.accumulatedNetBalance >= 0 
-                        ? 'Saldo Acumulado a Receber' 
-                        : 'Valor a Repassar ao Restaurante'}
+                        ? 'Saldo a Receber no Período' 
+                        : 'Valor a Repassar no Período'}
                     </h3>
                     <p style={{ color: '#94A3B8', fontSize: '0.8rem', margin: '2px 0 0 0' }}>
-                      {receivablesHistory.unpaidDaysCount > 0 
-                        ? `${receivablesHistory.unpaidDaysCount} dia(s) trabalhado(s) aguardando pagamento`
-                        : 'Nenhuma diária pendente de pagamento'}
+                      {dateRange.label || `${formatDateBR(dateRange.startDate)} ~ ${formatDateBR(dateRange.endDate)}`} — {receivablesHistory.unpaidDaysCount > 0 
+                        ? `${receivablesHistory.unpaidDaysCount} dia(s) pendente(s)` 
+                        : 'Nenhuma diária pendente'}
                     </p>
                   </div>
                 </div>
@@ -2123,7 +2131,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 </div>
 
                 <div>
-                  <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>Taxas Acumuladas</div>
+                  <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>Taxas no Período</div>
                   <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#34D399', marginTop: '2px' }}>
                     {formatCurrency(receivablesHistory.unpaidFeesTotal)}
                   </div>
@@ -2136,6 +2144,51 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   </div>
                 </div>
               </div>
+
+              {/* Notice if there are unpaid days outside current filter */}
+              {(receivablesHistory.allTimeUnpaidCount || 0) > (receivablesHistory.unpaidDaysCount || 0) && (
+                <div style={{
+                  marginTop: '12px',
+                  padding: '9px 12px',
+                  backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                  border: '1px solid rgba(245, 158, 11, 0.3)',
+                  borderRadius: '8px',
+                  fontSize: '0.78rem',
+                  color: '#FBBF24',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px'
+                }}>
+                  <span>
+                    ⚠️ Existem <strong>{receivablesHistory.allTimeUnpaidCount} dia(s) pendente(s)</strong> no histórico geral ({formatCurrency(receivablesHistory.allTimeUnpaidBalance)}).
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const earliest = new Date('2026-01-01T00:00:00');
+                      const now = new Date();
+                      setDateRange({
+                        startDate: startOfDay(earliest),
+                        endDate: endOfDay(now),
+                        label: 'Histórico Completo'
+                      });
+                    }}
+                    style={{
+                      background: 'rgba(255, 255, 255, 0.1)',
+                      border: 'none',
+                      color: '#F8FAFC',
+                      padding: '4px 8px',
+                      borderRadius: '6px',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      fontSize: '0.72rem'
+                    }}
+                  >
+                    Ver Tudo
+                  </button>
+                </div>
+              )}
 
               {/* Explanatory notice */}
               <div style={{
@@ -2265,12 +2318,12 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   }}>
                     <CheckCircle2 size={40} color="#10B981" style={{ margin: '0 auto 12px auto' }} />
                     <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: '1rem' }}>
-                      {receivablesFilter === 'unpaid' ? 'Tudo em dia! Nenhum dia pendente de pagamento.' : 'Nenhum registro encontrado.'}
+                      {receivablesFilter === 'unpaid' ? 'Tudo em dia! Nenhum dia pendente de pagamento no período.' : 'Nenhum registro encontrado no período.'}
                     </div>
                     <p style={{ fontSize: '0.8rem', marginTop: '4px' }}>
                       {receivablesFilter === 'unpaid' 
-                        ? 'Todas as suas diárias anteriores já foram pagas pelo restaurante.' 
-                        : 'Os dias trabalhados aparecerão listados aqui.'}
+                        ? 'Todas as suas diárias deste período já foram acertadas pelo restaurante.' 
+                        : 'Altere o período de datas no topo para visualizar outros dias ou meses.'}
                     </p>
                   </div>
                 );
