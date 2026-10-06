@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Bike, 
   Lock, 
@@ -15,12 +15,322 @@ import {
   MapPin,
   Check,
   X,
-  Send
+  Send,
+  Search,
+  ChevronDown
 } from 'lucide-react';
 import { Courier, Delivery, CourierAdjustment, NeighborhoodRate } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
 import { getOperationalDateKey, formatDateBR } from '../../lib/dateUtils';
+import { normalizeNeighborhoodName } from '../../lib/neighborhoodMatcher';
+
+interface SearchableNeighborhoodSelectProps {
+  value: string;
+  onChange: (neighborhoodName: string, rate?: number) => void;
+  availableNeighborhoods: NeighborhoodRate[];
+  placeholder?: string;
+  required?: boolean;
+}
+
+const SearchableNeighborhoodSelect: React.FC<SearchableNeighborhoodSelectProps> = ({
+  value,
+  onChange,
+  availableNeighborhoods,
+  placeholder = 'Digite o nome do bairro...',
+  required = false
+}) => {
+  const [searchTerm, setSearchTerm] = useState(value || '');
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setSearchTerm(value || '');
+  }, [value]);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('touchstart', handleOutsideClick);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('touchstart', handleOutsideClick);
+    };
+  }, []);
+
+  const filteredNeighborhoods = useMemo(() => {
+    const term = searchTerm.trim();
+    if (!term) {
+      return availableNeighborhoods;
+    }
+    const normalizedTerm = normalizeNeighborhoodName(term);
+    return availableNeighborhoods.filter((n) => {
+      const normalizedName = normalizeNeighborhoodName(n.name);
+      return normalizedName.includes(normalizedTerm);
+    });
+  }, [searchTerm, availableNeighborhoods]);
+
+  const selectedMatch = useMemo(() => {
+    if (!value) return null;
+    const norm = normalizeNeighborhoodName(value);
+    return availableNeighborhoods.find((n) => normalizeNeighborhoodName(n.name) === norm);
+  }, [value, availableNeighborhoods]);
+
+  const handleSelect = (neighborhood: NeighborhoodRate) => {
+    setSearchTerm(neighborhood.name);
+    onChange(neighborhood.name, neighborhood.total_rate);
+    setIsOpen(false);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const text = e.target.value;
+    setSearchTerm(text);
+    setIsOpen(true);
+
+    const norm = normalizeNeighborhoodName(text);
+    const matched = availableNeighborhoods.find((n) => normalizeNeighborhoodName(n.name) === norm);
+    if (matched) {
+      onChange(matched.name, matched.total_rate);
+    } else {
+      onChange(text, undefined);
+    }
+  };
+
+  const handleClear = () => {
+    setSearchTerm('');
+    onChange('', undefined);
+    setIsOpen(true);
+    inputRef.current?.focus();
+  };
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative', width: '100%' }}>
+      {/* Search Input Box */}
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+        <Search
+          size={18}
+          style={{
+            position: 'absolute',
+            left: '12px',
+            color: isOpen ? '#F43F5E' : '#94A3B8',
+            pointerEvents: 'none',
+            transition: 'color 0.2s'
+          }}
+        />
+        <input
+          ref={inputRef}
+          type="text"
+          value={searchTerm}
+          onChange={handleInputChange}
+          onFocus={() => setIsOpen(true)}
+          placeholder={placeholder}
+          required={required}
+          autoComplete="off"
+          style={{
+            width: '100%',
+            padding: '12px 38px 12px 38px',
+            backgroundColor: '#0F172A',
+            border: isOpen ? '1px solid #F43F5E' : '1px solid rgba(255, 255, 255, 0.15)',
+            borderRadius: '10px',
+            color: '#F8FAFC',
+            fontSize: '0.95rem',
+            outline: 'none',
+            boxSizing: 'border-box',
+            transition: 'border-color 0.2s',
+            boxShadow: isOpen ? '0 0 0 2px rgba(244, 63, 94, 0.2)' : 'none'
+          }}
+        />
+        {searchTerm ? (
+          <button
+            type="button"
+            onClick={handleClear}
+            style={{
+              position: 'absolute',
+              right: '10px',
+              background: 'rgba(255, 255, 255, 0.1)',
+              border: 'none',
+              borderRadius: '50%',
+              width: '22px',
+              height: '22px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#94A3B8',
+              cursor: 'pointer',
+              padding: 0
+            }}
+            title="Limpar campo"
+          >
+            <X size={13} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setIsOpen(!isOpen)}
+            style={{
+              position: 'absolute',
+              right: '10px',
+              background: 'none',
+              border: 'none',
+              color: '#94A3B8',
+              cursor: 'pointer',
+              padding: '4px',
+              display: 'flex',
+              alignItems: 'center'
+            }}
+          >
+            <ChevronDown size={16} />
+          </button>
+        )}
+      </div>
+
+      {/* Matched Badge indicator */}
+      {selectedMatch && !isOpen && (
+        <div style={{
+          marginTop: '6px',
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '6px',
+          backgroundColor: 'rgba(16, 185, 129, 0.12)',
+          border: '1px solid rgba(16, 185, 129, 0.3)',
+          borderRadius: '6px',
+          padding: '4px 8px',
+          fontSize: '0.74rem',
+          color: '#34D399'
+        }}>
+          <Check size={12} />
+          <span>Bairro cadastrado: <strong>{selectedMatch.name}</strong> • Taxa padrão: <strong>{formatCurrency(selectedMatch.total_rate)}</strong></span>
+        </div>
+      )}
+
+      {/* Floating Suggestions List */}
+      {isOpen && (
+        <div style={{
+          position: 'absolute',
+          top: 'calc(100% + 4px)',
+          left: 0,
+          right: 0,
+          maxHeight: '230px',
+          overflowY: 'auto',
+          backgroundColor: '#0F172A',
+          border: '1px solid rgba(255, 255, 255, 0.2)',
+          borderRadius: '12px',
+          boxShadow: '0 16px 36px rgba(0, 0, 0, 0.7)',
+          zIndex: 999,
+          padding: '6px 0'
+        }}>
+          {filteredNeighborhoods.length > 0 ? (
+            <>
+              <div style={{
+                padding: '4px 12px 6px 12px',
+                fontSize: '0.68rem',
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                color: '#64748B',
+                letterSpacing: '0.5px',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.05)'
+              }}>
+                {searchTerm.trim() ? `Resultados (${filteredNeighborhoods.length})` : `Bairros cadastrados (${filteredNeighborhoods.length})`}
+              </div>
+              {filteredNeighborhoods.map((n) => {
+                const isSelected = selectedMatch?.id === n.id || n.name.toLowerCase() === searchTerm.trim().toLowerCase();
+                return (
+                  <div
+                    key={n.id}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      handleSelect(n);
+                    }}
+                    onClick={() => handleSelect(n)}
+                    style={{
+                      padding: '10px 14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      cursor: 'pointer',
+                      backgroundColor: isSelected ? 'rgba(244, 63, 94, 0.15)' : 'transparent',
+                      borderLeft: isSelected ? '3px solid #F43F5E' : '3px solid transparent',
+                      transition: 'background-color 0.15s'
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isSelected) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+                      <MapPin size={14} style={{ color: isSelected ? '#F43F5E' : '#94A3B8', flexShrink: 0 }} />
+                      <span style={{
+                        fontSize: '0.88rem',
+                        fontWeight: isSelected ? 700 : 500,
+                        color: isSelected ? '#F8FAFC' : '#E2E8F0',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}>
+                        {n.name}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                      <span style={{
+                        fontSize: '0.82rem',
+                        fontWeight: 700,
+                        color: '#34D399',
+                        backgroundColor: 'rgba(52, 211, 153, 0.1)',
+                        padding: '2px 8px',
+                        borderRadius: '6px'
+                      }}>
+                        {formatCurrency(n.total_rate)}
+                      </span>
+                      {isSelected && <Check size={14} style={{ color: '#F43F5E' }} />}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          ) : (
+            <div style={{ padding: '14px', textAlign: 'center' }}>
+              <p style={{ color: '#94A3B8', fontSize: '0.82rem', margin: '0 0 8px 0' }}>
+                Nenhum bairro cadastrado com "{searchTerm}".
+              </p>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onChange(searchTerm.trim(), undefined);
+                  setIsOpen(false);
+                }}
+                onClick={() => {
+                  onChange(searchTerm.trim(), undefined);
+                  setIsOpen(false);
+                }}
+                style={{
+                  padding: '6px 12px',
+                  backgroundColor: 'rgba(244, 63, 94, 0.15)',
+                  border: '1px solid rgba(244, 63, 94, 0.3)',
+                  borderRadius: '6px',
+                  color: '#FB7185',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+              >
+                Usar "{searchTerm}" mesmo assim (ajuste a taxa abaixo)
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface CourierPortalViewProps {
   couriers: Courier[];
@@ -1051,7 +1361,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             width: '100%',
             padding: '24px',
             border: '1px solid rgba(255, 255, 255, 0.1)',
-            boxShadow: '0 20px 40px rgba(0, 0, 0, 0.5)'
+            boxShadow: '0 20px 40px rgba(0, 0, 0, 0.5)',
+            maxHeight: '92vh',
+            overflowY: 'auto'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: '#F8FAFC' }}>
@@ -1077,38 +1389,20 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
                   Bairro Correto da Entrega *
                 </label>
-                <select
+                <SearchableNeighborhoodSelect
                   value={proposedNeighborhood}
-                  onChange={(e) => {
-                    const selName = e.target.value;
-                    setProposedNeighborhood(selName);
-                    const matched = availableNeighborhoods.find(n => n.name.trim().toLowerCase() === selName.trim().toLowerCase());
-                    if (matched) {
-                      setProposedFee(String(matched.total_rate));
+                  onChange={(name, rate) => {
+                    setProposedNeighborhood(name);
+                    if (rate !== undefined) {
+                      setProposedFee(String(rate));
                     }
                   }}
-                  style={{
-                    width: '100%',
-                    padding: '12px 14px',
-                    backgroundColor: '#0F172A',
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
-                    borderRadius: '10px',
-                    color: '#F8FAFC',
-                    fontSize: '0.95rem',
-                    outline: 'none',
-                    cursor: 'pointer'
-                  }}
+                  availableNeighborhoods={availableNeighborhoods}
+                  placeholder="Digite para buscar o bairro..."
                   required
-                >
-                  <option value="">Selecione o bairro da entrega...</option>
-                  {availableNeighborhoods.map((n) => (
-                    <option key={n.id} value={n.name}>
-                      {n.name} (Taxa: {formatCurrency(n.total_rate)})
-                    </option>
-                  ))}
-                </select>
-                <span style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '4px', display: 'block' }}>
-                  Ao escolher o bairro, a taxa do sistema é preenchida automaticamente.
+                />
+                <span style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '6px', display: 'block' }}>
+                  Digite as primeiras letras para buscar o bairro. A taxa do sistema é preenchida automaticamente.
                 </span>
               </div>
 
@@ -1225,7 +1519,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             width: '100%',
             padding: '24px',
             border: '1px solid rgba(255, 255, 255, 0.1)',
-            boxShadow: '0 20px 40px rgba(0, 0, 0, 0.5)'
+            boxShadow: '0 20px 40px rgba(0, 0, 0, 0.5)',
+            maxHeight: '92vh',
+            overflowY: 'auto'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
               <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: '#F8FAFC' }}>
@@ -1267,40 +1563,25 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 />
               </div>
 
-              <div style={{ marginBottom: '12px' }}>
+              <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
                   Bairro da Entrega *
                 </label>
-                <select
+                <SearchableNeighborhoodSelect
                   value={newNeighborhood}
-                  onChange={(e) => {
-                    const selName = e.target.value;
-                    setNewNeighborhood(selName);
-                    const matched = availableNeighborhoods.find(n => n.name.trim().toLowerCase() === selName.trim().toLowerCase());
-                    if (matched) {
-                      setNewFee(String(matched.total_rate));
+                  onChange={(name, rate) => {
+                    setNewNeighborhood(name);
+                    if (rate !== undefined) {
+                      setNewFee(String(rate));
                     }
                   }}
-                  style={{
-                    width: '100%',
-                    padding: '12px 14px',
-                    backgroundColor: '#0F172A',
-                    border: '1px solid rgba(255, 255, 255, 0.15)',
-                    borderRadius: '10px',
-                    color: '#F8FAFC',
-                    fontSize: '0.95rem',
-                    outline: 'none',
-                    cursor: 'pointer'
-                  }}
+                  availableNeighborhoods={availableNeighborhoods}
+                  placeholder="Digite para buscar o bairro..."
                   required
-                >
-                  <option value="">Selecione o bairro da entrega...</option>
-                  {availableNeighborhoods.map((n) => (
-                    <option key={n.id} value={n.name}>
-                      {n.name} (Taxa: {formatCurrency(n.total_rate)})
-                    </option>
-                  ))}
-                </select>
+                />
+                <span style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '6px', display: 'block' }}>
+                  Digite as primeiras letras para buscar o bairro. A taxa do sistema é preenchida automaticamente.
+                </span>
               </div>
 
               <div style={{ marginBottom: '12px' }}>
