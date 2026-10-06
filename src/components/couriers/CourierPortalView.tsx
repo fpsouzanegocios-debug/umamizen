@@ -27,7 +27,9 @@ import {
   Wallet,
   Receipt,
   ArrowRight,
-  History
+  History,
+  FileText,
+  Save
 } from 'lucide-react';
 import { Courier, Delivery, Order, CourierAdjustment, NeighborhoodRate, DateRange } from '../../types';
 import { supabase } from '../../lib/supabase';
@@ -35,6 +37,23 @@ import { formatCurrency, formatDateTime } from '../../lib/formatters';
 import { getOperationalDateKey, formatDateBR, getDefaultDateRange, startOfDay, endOfDay } from '../../lib/dateUtils';
 import { normalizeNeighborhoodName } from '../../lib/neighborhoodMatcher';
 import { DateRangePicker } from '../common/DateRangePicker';
+
+export interface DraftAdjustment {
+  id: string;
+  type: 'edit_fee' | 'new_delivery' | 'remove_delivery';
+  delivery_id?: string | null;
+  order_number?: string | null;
+  customer_name?: string | null;
+  neighborhood_name?: string | null;
+  original_neighborhood?: string | null;
+  proposed_neighborhood?: string | null;
+  original_fee: number;
+  proposed_fee: number;
+  received_cash?: number | null;
+  payment_method?: string | null;
+  notes?: string;
+  saved_at: string;
+}
 
 interface SearchableNeighborhoodSelectProps {
   value: string;
@@ -862,6 +881,46 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [conferenceNote, setConferenceNote] = useState<string>('');
   const [isSubmittingConference, setIsSubmittingConference] = useState<boolean>(false);
 
+  // Draft Adjustments: Saved locally before sending batch in daily conference
+  const [draftAdjustments, setDraftAdjustments] = useState<DraftAdjustment[]>([]);
+
+  // Load drafts whenever courier or selectedDate changes
+  useEffect(() => {
+    if (!authenticatedCourier?.id || !selectedDate) {
+      setDraftAdjustments([]);
+      return;
+    }
+    try {
+      const storageKey = `sushi_draft_adjustments_${authenticatedCourier.id}_${selectedDate}`;
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        setDraftAdjustments(JSON.parse(saved));
+      } else {
+        setDraftAdjustments([]);
+      }
+    } catch (e) {
+      console.error('Erro ao carregar rascunhos de ajustes:', e);
+      setDraftAdjustments([]);
+    }
+  }, [authenticatedCourier?.id, selectedDate]);
+
+  // Helper to update draft adjustments and synchronize with localStorage
+  const saveDrafts = useCallback((newDrafts: DraftAdjustment[]) => {
+    setDraftAdjustments(newDrafts);
+    if (authenticatedCourier?.id && selectedDate) {
+      const storageKey = `sushi_draft_adjustments_${authenticatedCourier.id}_${selectedDate}`;
+      if (newDrafts.length === 0) {
+        localStorage.removeItem(storageKey);
+      } else {
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(newDrafts));
+        } catch (e) {
+          console.error('Erro ao salvar rascunhos no localStorage:', e);
+        }
+      }
+    }
+  }, [authenticatedCourier?.id, selectedDate]);
+
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Show Toast
@@ -1136,25 +1195,59 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
   // Deliveries total fee calculation, cash retention and daily net settlement
   const stats = useMemo(() => {
-    const totalCount = courierDeliveries.length;
-    const totalFee = courierDeliveries.reduce((sum, d) => sum + Number(d.courier_fee || 0), 0);
-    const pendingCount = dayAdjustments.filter((a) => a.status === 'pending').length;
-
+    let totalFee = 0;
     let totalCashCollected = 0;
+
+    const draftsByDelivery = new Map<string, DraftAdjustment>();
+    draftAdjustments.forEach((d) => {
+      if (d.delivery_id) draftsByDelivery.set(d.delivery_id, d);
+    });
+
     courierDeliveries.forEach((d) => {
-      const pInfo = getDeliveryPaymentInfo(d);
-      if (pInfo.isCash) {
-        totalCashCollected += pInfo.amount;
+      const draft = draftsByDelivery.get(d.id);
+      if (draft && draft.type === 'remove_delivery') {
+        // Marcado para remoção pelo motoboy (não soma taxa)
+        return;
+      }
+
+      // Taxa: usa a taxa do rascunho se houver, ou a taxa original
+      const fee = draft ? draft.proposed_fee : Number(d.courier_fee || 0);
+      totalFee += fee;
+
+      // Dinheiro retido: usa o valor informado no rascunho se especificado, ou da entrega
+      if (draft && draft.received_cash !== undefined && draft.received_cash !== null) {
+        if (draft.received_cash > 0) {
+          totalCashCollected += Number(draft.received_cash);
+        }
+      } else {
+        const pInfo = getDeliveryPaymentInfo(d);
+        if (pInfo.isCash) {
+          totalCashCollected += pInfo.amount;
+        }
       }
     });
 
-    // Also include new_delivery adjustments with reported cash
+    // Adiciona novas corridas salvas em rascunho
+    draftAdjustments.forEach((draft) => {
+      if (draft.type === 'new_delivery') {
+        totalFee += Number(draft.proposed_fee || 0);
+        if (draft.received_cash) {
+          totalCashCollected += Number(draft.received_cash);
+        }
+      }
+    });
+
+    // Inclui também novas corridas já salvas no banco
     dayAdjustments.forEach((adj) => {
       if (adj.type === 'new_delivery' && adj.status !== 'rejected' && adj.received_cash) {
         totalCashCollected += Number(adj.received_cash);
       }
     });
 
+    const newDeliveriesDraftCount = draftAdjustments.filter((d) => d.type === 'new_delivery').length;
+    const removeDeliveriesDraftCount = draftAdjustments.filter((d) => d.type === 'remove_delivery').length;
+    const totalCount = Math.max(0, courierDeliveries.length + newDeliveriesDraftCount - removeDeliveriesDraftCount);
+    const pendingCount = dayAdjustments.filter((a) => a.status === 'pending').length;
     const netBalance = totalFee - totalCashCollected;
 
     return { 
@@ -1164,29 +1257,40 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       totalCashCollected, 
       netBalance 
     };
-  }, [courierDeliveries, dayAdjustments, internalOrders, adjustments]);
+  }, [courierDeliveries, dayAdjustments, draftAdjustments, getDeliveryPaymentInfo]);
 
   const dailyConferenceRecord = useMemo(() => {
     return dayAdjustments.find((a) => a.type === 'daily_conference');
   }, [dayAdjustments]);
 
-  // Open Edit Modal with optional cash highlight
+  // Open Edit Modal with optional cash highlight and pre-filled draft values if present
   const handleOpenEdit = (delivery: Delivery, forceCash = false) => {
     setEditingDelivery(delivery);
-    setProposedNeighborhood(delivery.neighborhood_name || '');
-    setProposedFee(String(delivery.courier_fee || 8.00));
-    setEditNote('');
 
-    const pInfo = getDeliveryPaymentInfo(delivery);
-    const order = ordersMap.get(delivery.external_order_id) || (delivery.order_number ? ordersMap.get(delivery.order_number) : undefined);
-    const defAmount = delivery.order_amount || order?.gross_amount || 0;
+    const existingDraft = draftAdjustments.find((a) => a.delivery_id === delivery.id);
 
-    setIsCashPayment(forceCash ? true : pInfo.isCash);
-    setCashAmount(pInfo.isCash && pInfo.amount > 0 ? String(pInfo.amount) : (defAmount > 0 ? String(defAmount) : ''));
+    if (existingDraft) {
+      setProposedNeighborhood(existingDraft.proposed_neighborhood || delivery.neighborhood_name || '');
+      setProposedFee(String(existingDraft.proposed_fee));
+      setEditNote(existingDraft.notes || '');
+      setIsCashPayment(existingDraft.received_cash !== null && existingDraft.received_cash !== undefined ? true : (forceCash || false));
+      setCashAmount(existingDraft.received_cash ? String(existingDraft.received_cash) : '');
+    } else {
+      setProposedNeighborhood(delivery.neighborhood_name || '');
+      setProposedFee(String(delivery.courier_fee || 8.00));
+      setEditNote('');
+
+      const pInfo = getDeliveryPaymentInfo(delivery);
+      const order = ordersMap.get(delivery.external_order_id) || (delivery.order_number ? ordersMap.get(delivery.order_number) : undefined);
+      const defAmount = delivery.order_amount || order?.gross_amount || 0;
+
+      setIsCashPayment(forceCash ? true : pInfo.isCash);
+      setCashAmount(pInfo.isCash && pInfo.amount > 0 ? String(pInfo.amount) : (defAmount > 0 ? String(defAmount) : ''));
+    }
   };
 
-  // Submit Rate / Payment Edit
-  const handleSubmitEditFee = async (e: React.FormEvent) => {
+  // Save Rate / Payment Edit locally in Drafts (does NOT send individually to Supabase)
+  const handleSubmitEditFee = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingDelivery || !authenticatedCourier) return;
 
@@ -1200,46 +1304,37 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const finalCustName = getCustomerName(editingDelivery);
     const parsedCash = isCashPayment ? parseFloat(cashAmount.replace(',', '.')) : null;
 
-    setIsSubmittingEdit(true);
-    try {
-      const { error } = await supabase.from('courier_adjustments').insert({
-        courier_id: authenticatedCourier.id,
-        courier_name: authenticatedCourier.name,
-        date: selectedDate,
-        type: 'edit_fee',
-        delivery_id: editingDelivery.id,
-        order_number: editingDelivery.order_number || editingDelivery.external_order_id,
-        customer_name: finalCustName,
-        received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
-        payment_method: isCashPayment ? 'Dinheiro' : null,
-        neighborhood_name: finalNeighborhood || 'Bairro não especificado',
-        original_neighborhood: editingDelivery.neighborhood_name || '',
-        proposed_neighborhood: finalNeighborhood,
-        original_fee: Number(editingDelivery.courier_fee || 0),
-        proposed_fee: proposed,
-        notes: editNote.trim() || (isCashPayment ? `Informado pagamento em dinheiro: R$ ${parsedCash || 0}` : (finalNeighborhood !== editingDelivery.neighborhood_name ? `Bairro alterado para ${finalNeighborhood}` : 'Ajuste de taxa solicitado pelo motoboy')),
-        status: 'pending'
-      });
+    const newDraft: DraftAdjustment = {
+      id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      type: 'edit_fee',
+      delivery_id: editingDelivery.id,
+      order_number: editingDelivery.order_number || editingDelivery.external_order_id,
+      customer_name: finalCustName,
+      received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
+      payment_method: isCashPayment ? 'Dinheiro' : null,
+      neighborhood_name: finalNeighborhood || 'Bairro não especificado',
+      original_neighborhood: editingDelivery.neighborhood_name || '',
+      proposed_neighborhood: finalNeighborhood,
+      original_fee: Number(editingDelivery.courier_fee || 0),
+      proposed_fee: proposed,
+      notes: editNote.trim() || (isCashPayment ? `Informado pagamento em dinheiro: R$ ${parsedCash || 0}` : (finalNeighborhood !== editingDelivery.neighborhood_name ? `Bairro alterado para ${finalNeighborhood}` : 'Ajuste de taxa solicitado pelo motoboy')),
+      saved_at: new Date().toISOString()
+    };
 
-      if (error) throw error;
+    const nextDrafts = draftAdjustments.filter((a) => a.delivery_id !== editingDelivery.id).concat(newDraft);
+    saveDrafts(nextDrafts);
 
-      showToast('Solicitação de ajuste enviada! Aguardando conferência do restaurante.');
-      setEditingDelivery(null);
-      setProposedNeighborhood('');
-      setProposedFee('');
-      setEditNote('');
-      setIsCashPayment(false);
-      setCashAmount('');
-      fetchAdjustments();
-    } catch (err: any) {
-      alert('Erro ao enviar solicitação: ' + err.message);
-    } finally {
-      setIsSubmittingEdit(false);
-    }
+    showToast('Alteração salva com sucesso! Você pode ajustar outros pedidos e depois enviar tudo junto no fechamento.');
+    setEditingDelivery(null);
+    setProposedNeighborhood('');
+    setProposedFee('');
+    setEditNote('');
+    setIsCashPayment(false);
+    setCashAmount('');
   };
 
-  // Submit New Missing Delivery
-  const handleSubmitNewDelivery = async (e: React.FormEvent) => {
+  // Save New Missing Delivery locally in Drafts
+  const handleSubmitNewDelivery = (e: React.FormEvent) => {
     e.preventDefault();
     if (!authenticatedCourier) return;
 
@@ -1251,89 +1346,102 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
     const parsedCash = newIsCash ? parseFloat(newCashAmount.replace(',', '.')) : null;
 
-    setIsSubmittingNew(true);
-    try {
-      const { error } = await supabase.from('courier_adjustments').insert({
-        courier_id: authenticatedCourier.id,
-        courier_name: authenticatedCourier.name,
-        date: selectedDate,
-        type: 'new_delivery',
-        delivery_id: null,
-        order_number: newOrderNumber.trim() || 'AVULSO',
-        customer_name: newCustomerName.trim() || null,
-        received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
-        payment_method: newIsCash ? 'Dinheiro' : null,
-        neighborhood_name: newNeighborhood.trim() || 'Bairro a confirmar',
-        original_fee: 0,
-        proposed_fee: fee,
-        notes: newNote.trim() || (newIsCash ? `Corrida avulsa com dinheiro recebido: R$ ${parsedCash || 0}` : 'Corrida faltante adicionada pelo motoboy'),
-        status: 'pending'
-      });
+    const newDraft: DraftAdjustment = {
+      id: `draft_new_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      type: 'new_delivery',
+      delivery_id: null,
+      order_number: newOrderNumber.trim() || 'AVULSO',
+      customer_name: newCustomerName.trim() || null,
+      received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
+      payment_method: newIsCash ? 'Dinheiro' : null,
+      neighborhood_name: newNeighborhood.trim() || 'Bairro a confirmar',
+      original_fee: 0,
+      proposed_fee: fee,
+      notes: newNote.trim() || (newIsCash ? `Corrida avulsa com dinheiro recebido: R$ ${parsedCash || 0}` : 'Corrida faltante adicionada pelo motoboy'),
+      saved_at: new Date().toISOString()
+    };
 
-      if (error) throw error;
+    saveDrafts([...draftAdjustments, newDraft]);
 
-      showToast('Corrida faltante enviada! Aguardando confirmação do restaurante.');
-      setShowAddDeliveryModal(false);
-      setNewOrderNumber('');
-      setNewCustomerName('');
-      setNewNeighborhood('');
-      setNewFee('8.00');
-      setNewIsCash(false);
-      setNewCashAmount('');
-      setNewNote('');
-      fetchAdjustments();
-    } catch (err: any) {
-      alert('Erro ao enviar corrida: ' + err.message);
-    } finally {
-      setIsSubmittingNew(false);
-    }
+    showToast('Corrida faltante salva! Ela será enviada junto no relatório de conferência.');
+    setShowAddDeliveryModal(false);
+    setNewOrderNumber('');
+    setNewCustomerName('');
+    setNewNeighborhood('');
+    setNewFee('8.00');
+    setNewIsCash(false);
+    setNewCashAmount('');
+    setNewNote('');
   };
 
-  // Submit Delivery Removal Request
-  const handleSubmitDeleteRequest = async (e: React.FormEvent) => {
+  // Save Delivery Removal locally in Drafts
+  const handleSubmitDeleteRequest = (e: React.FormEvent) => {
     e.preventDefault();
     if (!deletingDelivery || !authenticatedCourier) return;
 
-    setIsSubmittingDelete(true);
-    try {
-      const { error } = await supabase.from('courier_adjustments').insert({
-        courier_id: authenticatedCourier.id,
-        courier_name: authenticatedCourier.name,
-        date: selectedDate,
-        type: 'remove_delivery',
-        delivery_id: deletingDelivery.id,
-        order_number: deletingDelivery.order_number || deletingDelivery.external_order_id,
-        neighborhood_name: deletingDelivery.neighborhood_name || '',
-        original_fee: Number(deletingDelivery.courier_fee || 0),
-        proposed_fee: 0,
-        notes: deleteNote.trim() || 'Motoboy informou que não realizou esta corrida',
-        status: 'pending'
-      });
+    const newDraft: DraftAdjustment = {
+      id: `draft_del_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      type: 'remove_delivery',
+      delivery_id: deletingDelivery.id,
+      order_number: deletingDelivery.order_number || deletingDelivery.external_order_id,
+      neighborhood_name: deletingDelivery.neighborhood_name || '',
+      original_fee: Number(deletingDelivery.courier_fee || 0),
+      proposed_fee: 0,
+      notes: deleteNote.trim() || 'Motoboy informou que não realizou esta corrida',
+      saved_at: new Date().toISOString()
+    };
 
-      if (error) throw error;
+    const nextDrafts = draftAdjustments.filter((a) => a.delivery_id !== deletingDelivery.id).concat(newDraft);
+    saveDrafts(nextDrafts);
 
-      showToast('Solicitação de remoção enviada para conferência do restaurante.');
-      setDeletingDelivery(null);
-      setDeleteNote('');
-      fetchAdjustments();
-    } catch (err: any) {
-      alert('Erro ao enviar solicitação: ' + err.message);
-    } finally {
-      setIsSubmittingDelete(false);
-    }
+    showToast('Solicitação de remoção salva! Será enviada junto na conferência.');
+    setDeletingDelivery(null);
+    setDeleteNote('');
   };
 
-  // Submit Full Day Conference to Restaurant
+  // Submit Full Day Conference + ALL Draft Adjustments in Batch to Restaurant
   const handleSendDailyConference = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!authenticatedCourier) return;
 
     setIsSubmittingConference(true);
     try {
-      const existing = dayAdjustments.find(a => a.type === 'daily_conference');
+      // 1. If there are draft adjustments, insert them in batch to Supabase courier_adjustments!
+      if (draftAdjustments.length > 0) {
+        const recordsToInsert = draftAdjustments.map((draft) => ({
+          courier_id: authenticatedCourier.id,
+          courier_name: authenticatedCourier.name,
+          date: selectedDate,
+          type: draft.type,
+          delivery_id: draft.delivery_id || null,
+          order_number: draft.order_number || null,
+          customer_name: draft.customer_name || null,
+          received_cash: draft.received_cash || null,
+          payment_method: draft.payment_method || null,
+          neighborhood_name: draft.neighborhood_name || 'Bairro não especificado',
+          original_neighborhood: draft.original_neighborhood || '',
+          proposed_neighborhood: draft.proposed_neighborhood || '',
+          original_fee: draft.original_fee,
+          proposed_fee: draft.proposed_fee,
+          notes: draft.notes || '',
+          status: 'pending'
+        }));
+
+        const { error: adjsError } = await supabase
+          .from('courier_adjustments')
+          .insert(recordsToInsert);
+
+        if (adjsError) throw adjsError;
+      }
+
+      // 2. Insert or update the daily conference record
+      const existing = dayAdjustments.find((a) => a.type === 'daily_conference');
+      const adjustmentsSummary = draftAdjustments.length > 0
+        ? ` (${draftAdjustments.length} ajustes incluídos neste envio)`
+        : '';
       const summaryText = conferenceNote.trim()
         ? conferenceNote.trim()
-        : `Fechamento do turno: ${stats.totalCount} entregas, R$ ${stats.totalFee.toFixed(2)} em taxas, R$ ${stats.totalCashCollected.toFixed(2)} em dinheiro retido.`;
+        : `Fechamento do turno: ${stats.totalCount} entregas, R$ ${stats.totalFee.toFixed(2)} em taxas, R$ ${stats.totalCashCollected.toFixed(2)} em dinheiro retido.${adjustmentsSummary}`;
 
       const { error } = await supabase.from('courier_adjustments').upsert({
         ...(existing ? { id: existing.id } : {}),
@@ -1351,7 +1459,15 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
       if (error) throw error;
 
-      showToast('Conferência do dia enviada com sucesso! O restaurante recebeu seu fechamento completo.');
+      // 3. Clear local draft adjustments
+      const countSent = draftAdjustments.length;
+      saveDrafts([]);
+
+      showToast(
+        countSent > 0
+          ? `Conferência enviada com sucesso! ${countSent} ajuste(s) encaminhado(s) ao restaurante.`
+          : 'Conferência do dia enviada com sucesso! O restaurante recebeu seu fechamento.'
+      );
       setShowSendConferenceModal(false);
       setConferenceNote('');
       fetchAdjustments();
@@ -2004,7 +2120,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
               }}
             >
               <Send size={18} />
-              <span>Enviar Conferência do Dia para o Restaurante</span>
+              <span>
+                {draftAdjustments.length > 0
+                  ? `Enviar Conferência do Dia (${draftAdjustments.length} alterações salvas)`
+                  : 'Enviar Conferência do Dia para o Restaurante'}
+              </span>
             </button>
           )}
         </div>
@@ -2034,6 +2154,146 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             <span>Adicionar Corrida Faltante (que não está na lista)</span>
           </button>
         </div>
+
+        {/* Banner de Rascunhos Salvos Aguardando Envio */}
+        {draftAdjustments.length > 0 && (
+          <div style={{
+            backgroundColor: 'rgba(56, 189, 248, 0.1)',
+            border: '1.5px solid rgba(56, 189, 248, 0.4)',
+            borderRadius: '14px',
+            padding: '14px 16px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            flexWrap: 'wrap'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '10px',
+                backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                color: '#38BDF8',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <FileText size={20} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 800, color: '#38BDF8', fontSize: '0.92rem' }}>
+                  {draftAdjustments.length} alteração(ões) salva(s) aguardando envio!
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#CBD5E1', marginTop: '2px' }}>
+                  Você pode continuar editando suas outras corridas. Ao terminar, clique em enviar para gerar o fechamento consolidado.
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowSendConferenceModal(true)}
+              style={{
+                padding: '10px 16px',
+                background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+                border: 'none',
+                borderRadius: '10px',
+                color: '#FFFFFF',
+                fontSize: '0.82rem',
+                fontWeight: 800,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                boxShadow: '0 2px 10px rgba(16, 185, 129, 0.3)'
+              }}
+            >
+              <Send size={15} />
+              <span>Enviar Conferência Agora ({draftAdjustments.length})</span>
+            </button>
+          </div>
+        )}
+
+        {/* Cards de Corridas Faltantes Salvas em Rascunho */}
+        {draftAdjustments.filter(d => d.type === 'new_delivery').length > 0 && (
+          <div style={{ marginBottom: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {draftAdjustments.filter(d => d.type === 'new_delivery').map((draft) => (
+              <div
+                key={draft.id}
+                style={{
+                  backgroundColor: '#1E293B',
+                  borderRadius: '12px',
+                  padding: '14px 16px',
+                  border: '1.5px dashed #38BDF8',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontWeight: 800, fontSize: '0.98rem', color: '#F8FAFC' }}>
+                        #{draft.order_number}
+                      </span>
+                      <span style={{
+                        fontSize: '0.7rem',
+                        backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                        color: '#38BDF8',
+                        padding: '2px 8px',
+                        borderRadius: '6px',
+                        fontWeight: 700
+                      }}>
+                        CORRIDA FALTANTE (SALVA)
+                      </span>
+                    </div>
+                    {draft.customer_name && (
+                      <div style={{ color: '#38BDF8', fontSize: '0.86rem', fontWeight: 600, marginTop: '4px' }}>
+                        {draft.customer_name}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', color: '#CBD5E1', fontSize: '0.85rem' }}>
+                      <MapPin size={14} color="#F43F5E" />
+                      <span>{draft.neighborhood_name}</span>
+                    </div>
+                    {draft.received_cash ? (
+                      <div style={{ marginTop: '6px', color: '#FBBF24', fontSize: '0.78rem', fontWeight: 700 }}>
+                        💵 Dinheiro Retido: {formatCurrency(draft.received_cash)}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#34D399' }}>
+                      {formatCurrency(draft.proposed_fee)}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#94A3B8' }}>
+                      taxa informada
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        saveDrafts(draftAdjustments.filter((d) => d.id !== draft.id));
+                        showToast('Corrida faltante removida dos rascunhos.');
+                      }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#FB7185',
+                        fontSize: '0.74rem',
+                        cursor: 'pointer',
+                        marginTop: '8px',
+                        textDecoration: 'underline'
+                      }}
+                    >
+                      Remover
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Deliveries Section Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
@@ -2088,7 +2348,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {paginatedDeliveries.map((delivery, pageIdx) => {
             const itemIndex = (safeDeliveriesCurrentPage - 1) * DELIVERIES_PER_PAGE + pageIdx;
-            // Check if there is an active adjustment for this delivery
+            // Check if there is a draft adjustment for this delivery
+            const draftAdj = draftAdjustments.find(
+              (a) => a.delivery_id === delivery.id
+            );
+            // Check if there is an active adjustment for this delivery in DB
             const pendingAdj = dayAdjustments.find(
               (a) => a.delivery_id === delivery.id && a.status === 'pending'
             );
@@ -2106,7 +2370,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   backgroundColor: '#1E293B',
                   borderRadius: '12px',
                   padding: '14px 16px',
-                  border: pendingAdj 
+                  border: draftAdj
+                    ? '1.5px solid rgba(56, 189, 248, 0.6)'
+                    : pendingAdj 
                     ? '1px solid rgba(245, 158, 11, 0.5)' 
                     : approvedAdj 
                     ? '1px solid rgba(16, 185, 129, 0.4)' 
@@ -2154,15 +2420,27 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', color: '#CBD5E1', fontSize: '0.85rem' }}>
                       <MapPin size={14} color="#F43F5E" />
-                      <span>{delivery.neighborhood_name || 'Bairro Centro'}</span>
+                      <span>{draftAdj?.proposed_neighborhood || delivery.neighborhood_name || 'Bairro Centro'}</span>
+                      {draftAdj?.proposed_neighborhood && draftAdj.proposed_neighborhood !== delivery.neighborhood_name && (
+                        <span style={{ fontSize: '0.7rem', color: '#38BDF8', fontWeight: 700, backgroundColor: 'rgba(56, 189, 248, 0.15)', padding: '1px 6px', borderRadius: '4px' }}>
+                          alterado
+                        </span>
+                      )}
                     </div>
 
                     {/* Payment Info */}
                     {(() => {
                       const pInfo = getDeliveryPaymentInfo(delivery);
+                      const isCashNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
+                        ? draftAdj.received_cash > 0 
+                        : pInfo.isCash;
+                      const cashValNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
+                        ? Number(draftAdj.received_cash) 
+                        : pInfo.amount;
+
                       return (
                         <div style={{ marginTop: '6px' }}>
-                          {pInfo.isCash ? (
+                          {isCashNow ? (
                             <span style={{
                               display: 'inline-flex',
                               alignItems: 'center',
@@ -2176,7 +2454,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                               fontWeight: 700
                             }}>
                               <Banknote size={14} />
-                              <span>Dinheiro Retido: {formatCurrency(pInfo.amount)}</span>
+                              <span>Dinheiro Retido: {formatCurrency(cashValNow)}</span>
                             </span>
                           ) : (
                             <span style={{
@@ -2199,14 +2477,71 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   </div>
 
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#34D399' }}>
-                      {formatCurrency(delivery.courier_fee)}
+                    <div style={{ fontSize: '1.15rem', fontWeight: 800, color: draftAdj ? '#38BDF8' : '#34D399' }}>
+                      {formatCurrency(draftAdj ? draftAdj.proposed_fee : delivery.courier_fee)}
                     </div>
-                    <div style={{ fontSize: '0.7rem', color: '#64748B' }}>
-                      taxa da corrida
+                    <div style={{ fontSize: '0.7rem', color: draftAdj ? '#38BDF8' : '#64748B' }}>
+                      {draftAdj ? 'taxa ajustada (salva)' : 'taxa da corrida'}
                     </div>
+                    {draftAdj && draftAdj.proposed_fee !== Number(delivery.courier_fee || 0) && (
+                      <div style={{ fontSize: '0.68rem', color: '#64748B', textDecoration: 'line-through' }}>
+                        de {formatCurrency(delivery.courier_fee)}
+                      </div>
+                    )}
                   </div>
                 </div>
+
+                {/* Draft Adjustment Status Pill */}
+                {draftAdj && (
+                  <div style={{
+                    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+                    border: '1px solid rgba(56, 189, 248, 0.4)',
+                    borderRadius: '8px',
+                    padding: '8px 12px',
+                    marginTop: '8px',
+                    fontSize: '0.78rem',
+                    color: '#38BDF8',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '8px'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <FileText size={14} style={{ flexShrink: 0 }} />
+                      <span>
+                        {draftAdj.type === 'remove_delivery' ? (
+                          <strong style={{ color: '#FB7185' }}>Marcado para remoção (Rascunho — não enviada ainda)</strong>
+                        ) : (
+                          <>
+                            <strong>Alteração salva (Rascunho):</strong> Taxa <strong>{formatCurrency(draftAdj.proposed_fee)}</strong>
+                            {draftAdj.proposed_neighborhood && draftAdj.proposed_neighborhood !== delivery.neighborhood_name && (
+                              <span> • Bairro: <strong>{draftAdj.proposed_neighborhood}</strong></span>
+                            )}
+                            {draftAdj.received_cash ? <span> • Dinheiro: <strong>{formatCurrency(draftAdj.received_cash)}</strong></span> : ''}
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        saveDrafts(draftAdjustments.filter((a) => a.delivery_id !== delivery.id));
+                        showToast('Rascunho desta corrida descartado.');
+                      }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        color: '#94A3B8',
+                        fontSize: '0.72rem',
+                        cursor: 'pointer',
+                        textDecoration: 'underline',
+                        flexShrink: 0
+                      }}
+                    >
+                      Descartar
+                    </button>
+                  </div>
+                )}
 
                 {/* Adjustment Status Pills */}
                 {pendingAdj && (
@@ -3032,7 +3367,33 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 />
               </div>
 
-              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap' }}>
+                {(() => {
+                  const existingDraft = draftAdjustments.find((a) => a.delivery_id === editingDelivery.id);
+                  if (!existingDraft) return null;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        saveDrafts(draftAdjustments.filter((a) => a.delivery_id !== editingDelivery.id));
+                        showToast('Rascunho desta corrida descartado.');
+                        setEditingDelivery(null);
+                      }}
+                      style={{
+                        padding: '12px 14px',
+                        backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        borderRadius: '10px',
+                        color: '#FB7185',
+                        fontSize: '0.85rem',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Descartar Rascunho
+                    </button>
+                  );
+                })()}
                 <button
                   type="button"
                   onClick={() => setEditingDelivery(null)}
@@ -3051,10 +3412,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingEdit}
                   style={{
                     padding: '12px 20px',
-                    backgroundColor: '#F43F5E',
+                    backgroundColor: '#10B981',
                     border: 'none',
                     borderRadius: '10px',
                     color: '#FFFFFF',
@@ -3063,12 +3423,21 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '6px'
+                    gap: '6px',
+                    boxShadow: '0 4px 14px rgba(16, 185, 129, 0.3)'
                   }}
                 >
-                  <Send size={15} />
-                  <span>{isSubmittingEdit ? 'Enviando...' : 'Enviar para Conferência'}</span>
+                  <Check size={16} />
+                  <span>Salvar Alteração</span>
                 </button>
+              </div>
+              <div style={{
+                marginTop: '12px',
+                textAlign: 'center',
+                fontSize: '0.74rem',
+                color: '#94A3B8'
+              }}>
+                💾 Esta alteração fica salva aqui. Você pode editar quantas corridas quiser e enviar todas juntas ao clicar em <strong>Enviar Conferência</strong>.
               </div>
             </form>
           </div>
@@ -3302,10 +3671,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingNew}
                   style={{
                     padding: '12px 20px',
-                    backgroundColor: '#F43F5E',
+                    backgroundColor: '#10B981',
                     border: 'none',
                     borderRadius: '10px',
                     color: '#FFFFFF',
@@ -3314,12 +3682,21 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '6px'
+                    gap: '6px',
+                    boxShadow: '0 4px 14px rgba(16, 185, 129, 0.3)'
                   }}
                 >
-                  <Send size={15} />
-                  <span>{isSubmittingNew ? 'Enviando...' : 'Enviar para o Restaurante'}</span>
+                  <Check size={16} />
+                  <span>Salvar Corrida Faltante</span>
                 </button>
+              </div>
+              <div style={{
+                marginTop: '12px',
+                textAlign: 'center',
+                fontSize: '0.74rem',
+                color: '#94A3B8'
+              }}>
+                💡 A corrida faltante ficará salva nos rascunhos e será enviada junto no fechamento da conferência do dia.
               </div>
             </form>
           </div>
@@ -3408,7 +3785,6 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingDelete}
                   style={{
                     padding: '12px 20px',
                     backgroundColor: '#EF4444',
@@ -3417,11 +3793,23 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     color: '#FFFFFF',
                     fontSize: '0.85rem',
                     fontWeight: 700,
-                    cursor: 'pointer'
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
                   }}
                 >
-                  {isSubmittingDelete ? 'Enviando...' : 'Confirmar e Enviar'}
+                  <Trash2 size={15} />
+                  <span>Salvar Solicitação de Remoção</span>
                 </button>
+              </div>
+              <div style={{
+                marginTop: '12px',
+                textAlign: 'center',
+                fontSize: '0.74rem',
+                color: '#94A3B8'
+              }}>
+                💡 A solicitação de remoção ficará salva nos rascunhos e será enviada junto na conferência do dia.
               </div>
             </form>
           </div>
@@ -3503,7 +3891,75 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
               </div>
             </div>
 
-            {/* List of Adjustments included */}
+            {/* List of Draft Adjustments to be sent now */}
+            {draftAdjustments.length > 0 && (
+              <div style={{
+                backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                borderRadius: '12px',
+                padding: '12px 14px',
+                marginBottom: '14px',
+                fontSize: '0.8rem'
+              }}>
+                <div style={{ color: '#38BDF8', fontWeight: 800, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <FileText size={16} />
+                  <span>Alterações salvas que serão enviadas neste fechamento ({draftAdjustments.length}):</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto' }}>
+                  {draftAdjustments.map((draft) => (
+                    <div
+                      key={draft.id}
+                      style={{
+                        padding: '8px 10px',
+                        backgroundColor: '#0F172A',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        fontSize: '0.78rem'
+                      }}
+                    >
+                      <div>
+                        <strong style={{ color: '#F8FAFC' }}>#{draft.order_number || 'S/N'}</strong>: {
+                          draft.type === 'edit_fee'
+                            ? `Taxa ${formatCurrency(draft.proposed_fee)} (original ${formatCurrency(draft.original_fee)}) • Bairro: ${draft.proposed_neighborhood || 'mesmo'}`
+                            : draft.type === 'new_delivery'
+                            ? `Corrida Faltante: ${draft.neighborhood_name} (${formatCurrency(draft.proposed_fee)})`
+                            : 'Remoção de corrida (não realizada)'
+                        }
+                        {draft.received_cash ? ` • Dinheiro: ${formatCurrency(draft.received_cash)}` : ''}
+                        {draft.notes ? (
+                          <div style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '2px' }}>
+                            Obs: "{draft.notes}"
+                          </div>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          saveDrafts(draftAdjustments.filter((d) => d.id !== draft.id));
+                        }}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#FB7185',
+                          cursor: 'pointer',
+                          fontSize: '0.72rem',
+                          textDecoration: 'underline',
+                          flexShrink: 0
+                        }}
+                        title="Remover este ajuste antes de enviar"
+                      >
+                        Excluir
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* List of Adjustments previously sent */}
             {dayAdjustments.filter(a => a.type !== 'daily_conference').length > 0 && (
               <div style={{
                 backgroundColor: 'rgba(255, 255, 255, 0.04)',
@@ -3513,7 +3969,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 fontSize: '0.78rem'
               }}>
                 <div style={{ color: '#CBD5E1', fontWeight: 700, marginBottom: '6px' }}>
-                  Solicitações e alterações incluídas neste envio:
+                  Ajustes enviados anteriormente neste dia:
                 </div>
                 <ul style={{ margin: 0, paddingLeft: '16px', color: '#94A3B8', display: 'flex', flexDirection: 'column', gap: '3px' }}>
                   {dayAdjustments.filter(a => a.type !== 'daily_conference').map(adj => (
@@ -3573,8 +4029,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   disabled={isSubmittingConference}
                   style={{
                     flex: 2,
-                    padding: '12px',
-                    backgroundColor: '#10B981',
+                    padding: '12px 18px',
+                    background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
                     border: 'none',
                     borderRadius: '10px',
                     color: '#FFFFFF',
@@ -3584,11 +4040,18 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: '6px'
+                    gap: '6px',
+                    boxShadow: '0 4px 12px rgba(16, 185, 129, 0.35)'
                   }}
                 >
                   <Send size={16} />
-                  <span>{isSubmittingConference ? 'Enviando...' : 'Confirmar e Enviar'}</span>
+                  <span>
+                    {isSubmittingConference
+                      ? 'Enviando...'
+                      : draftAdjustments.length > 0
+                      ? `Confirmar e Enviar (${draftAdjustments.length} ajustes)`
+                      : 'Confirmar e Enviar Conferência'}
+                  </span>
                 </button>
               </div>
             </form>
