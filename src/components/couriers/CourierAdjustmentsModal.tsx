@@ -555,11 +555,35 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" style={{ zIndex: 110 }}>
-      <div className="modal-content" style={{ maxWidth: '880px', width: '96%', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}>
+    <div className="modal-overlay" style={{ zIndex: 110, padding: '16px' }}>
+      <div
+        className="modal-content"
+        style={{
+          maxWidth: '920px',
+          width: '95%',
+          height: '88vh',
+          maxHeight: '88vh',
+          display: 'flex',
+          flexDirection: 'column',
+          padding: 0,
+          overflow: 'hidden',
+          backgroundColor: '#0F172A',
+          borderRadius: '16px',
+          border: '1px solid rgba(255, 255, 255, 0.12)',
+          boxShadow: '0 25px 60px -15px rgba(0, 0, 0, 0.85)'
+        }}
+      >
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '16px', borderBottom: '1px solid var(--border-color)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '18px 24px',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+          backgroundColor: '#111827'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <div style={{
               width: '42px',
               height: '42px',
@@ -568,7 +592,8 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
               color: '#F43F5E',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center'
+              justifyContent: 'center',
+              flexShrink: 0
             }}>
               <UserCheck size={24} />
             </div>
@@ -576,26 +601,43 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
               <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, color: '#F8FAFC' }}>
                 Conferência Diária dos Motoboys
               </h2>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', margin: '2px 0 0 0' }}>
+              <p style={{ color: '#94A3B8', fontSize: '0.82rem', margin: '2px 0 0 0' }}>
                 Todas as corridas, taxas e dinheiro retido agrupados por dia para conferência completa
               </p>
             </div>
           </div>
 
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-            <X size={20} />
+          <button
+            onClick={onClose}
+            style={{
+              background: 'rgba(255, 255, 255, 0.05)',
+              border: 'none',
+              borderRadius: '8px',
+              width: '32px',
+              height: '32px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#94A3B8',
+              cursor: 'pointer',
+              transition: 'background 0.2s'
+            }}
+          >
+            <X size={18} />
           </button>
         </div>
 
         {/* Filter Bar */}
         <div style={{
+          flexShrink: 0,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           flexWrap: 'wrap',
           gap: '12px',
-          padding: '14px 0',
-          borderBottom: '1px solid var(--border-color)'
+          padding: '12px 24px',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+          backgroundColor: '#0B1120'
         }}>
           {/* Tabs: Pendentes vs Resolvidos */}
           <div style={{ display: 'inline-flex', background: 'rgba(255, 255, 255, 0.05)', padding: '3px', borderRadius: '8px' }}>
@@ -676,8 +718,20 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           </div>
         </div>
 
-        {/* Content Body: Grouped by Day */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 0', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {/* Content Body: Grouped by Day (Smooth Scrollable Container) */}
+        <div
+          className="custom-scrollbar"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            padding: '20px 24px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px',
+            overscrollBehavior: 'contain'
+          }}
+        >
           {isLoading && (
             <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
               Carregando conferências dos motoboys...
@@ -714,7 +768,8 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
                     ? '1.5px solid rgba(245, 158, 11, 0.5)'
                     : '1px solid rgba(16, 185, 129, 0.4)',
                   boxShadow: '0 4px 14px rgba(0, 0, 0, 0.25)',
-                  overflow: 'hidden'
+                  overflow: 'hidden',
+                  flexShrink: 0
                 }}
               >
                 {/* Day Card Header */}
@@ -1178,9 +1233,41 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           })}
         </div>
 
-        {/* Modal Footer */}
-        <div style={{ paddingTop: '14px', borderTop: '1px solid var(--border-color)', display: 'flex', justifyContent: 'flex-end' }}>
-          <button type="button" onClick={onClose} className="btn btn-secondary">
+        {/* Modal Footer (Pinned Cleanly at the Bottom) */}
+        <div style={{
+          flexShrink: 0,
+          padding: '14px 24px',
+          borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+          backgroundColor: '#111827',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px'
+        }}>
+          <div style={{ fontSize: '0.82rem', color: '#94A3B8', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <UserCheck size={16} color="#38BDF8" />
+            <span>
+              Mostrando <strong style={{ color: '#F8FAFC' }}>{dailyConferenceGroups.length}</strong> {dailyConferenceGroups.length === 1 ? 'fechamento de dia' : 'fechamentos de dias'}
+              {totalPendingCount > 0 && (
+                <span style={{ color: '#FBBF24', marginLeft: '6px' }}>
+                  ({totalPendingCount} pendência{totalPendingCount > 1 ? 's' : ''} aguardando)
+                </span>
+              )}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn btn-secondary"
+            style={{
+              padding: '9px 24px',
+              borderRadius: '10px',
+              fontWeight: 700,
+              fontSize: '0.88rem'
+            }}
+          >
             Fechar
           </button>
         </div>
