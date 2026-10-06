@@ -18,6 +18,8 @@ import {
   Send,
   Search,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   User,
   Banknote,
   CreditCard,
@@ -341,6 +343,167 @@ const SearchableNeighborhoodSelect: React.FC<SearchableNeighborhoodSelectProps> 
   );
 };
 
+interface PaginationControlsProps {
+  currentPage: number;
+  totalPages: number;
+  totalItems: number;
+  itemsPerPage: number;
+  onPageChange: (page: number) => void;
+  itemName?: string;
+}
+
+const PaginationControls: React.FC<PaginationControlsProps> = ({
+  currentPage,
+  totalPages,
+  totalItems,
+  itemsPerPage,
+  onPageChange,
+  itemName = 'itens'
+}) => {
+  if (totalItems <= itemsPerPage) return null;
+
+  const startItem = (currentPage - 1) * itemsPerPage + 1;
+  const endItem = Math.min(currentPage * itemsPerPage, totalItems);
+
+  // Generate page numbers
+  const getPageNumbers = () => {
+    const pages: (number | string)[] = [];
+    if (totalPages <= 5) {
+      for (let i = 1; i <= totalPages; i++) pages.push(i);
+    } else {
+      if (currentPage <= 3) {
+        pages.push(1, 2, 3, '...', totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1, '...', totalPages - 2, totalPages - 1, totalPages);
+      } else {
+        pages.push(1, '...', currentPage, '...', totalPages);
+      }
+    }
+    return pages;
+  };
+
+  return (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '12px',
+      marginTop: '16px',
+      padding: '12px 14px',
+      backgroundColor: '#1E293B',
+      borderRadius: '12px',
+      border: '1px solid rgba(255, 255, 255, 0.08)'
+    }}>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '8px',
+        fontSize: '0.8rem',
+        color: '#94A3B8'
+      }}>
+        <span>
+          Mostrando <strong style={{ color: '#F8FAFC' }}>{startItem}–{endItem}</strong> de <strong style={{ color: '#F8FAFC' }}>{totalItems}</strong> {itemName}
+        </span>
+        <span style={{ fontWeight: 600, color: '#CBD5E1' }}>
+          Página {currentPage} de {totalPages}
+        </span>
+      </div>
+
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '6px',
+        flexWrap: 'wrap'
+      }}>
+        <button
+          type="button"
+          onClick={() => onPageChange(currentPage - 1)}
+          disabled={currentPage === 1}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            backgroundColor: currentPage === 1 ? 'rgba(255, 255, 255, 0.03)' : 'rgba(255, 255, 255, 0.08)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            color: currentPage === 1 ? '#64748B' : '#F8FAFC',
+            cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            transition: 'all 0.15s ease'
+          }}
+        >
+          <ChevronLeft size={16} />
+          <span>Anterior</span>
+        </button>
+
+        {getPageNumbers().map((page, idx) => {
+          if (page === '...') {
+            return (
+              <span key={`dots-${idx}`} style={{ padding: '0 4px', color: '#64748B', fontSize: '0.85rem' }}>
+                ...
+              </span>
+            );
+          }
+          const pageNum = Number(page);
+          const isActive = pageNum === currentPage;
+          return (
+            <button
+              key={pageNum}
+              type="button"
+              onClick={() => onPageChange(pageNum)}
+              style={{
+                minWidth: '36px',
+                height: '36px',
+                padding: '0 8px',
+                borderRadius: '8px',
+                backgroundColor: isActive ? '#F43F5E' : 'rgba(255, 255, 255, 0.05)',
+                border: isActive ? '1px solid #F43F5E' : '1px solid rgba(255, 255, 255, 0.08)',
+                color: isActive ? '#FFFFFF' : '#CBD5E1',
+                fontSize: '0.82rem',
+                fontWeight: isActive ? 700 : 500,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              {pageNum}
+            </button>
+          );
+        })}
+
+        <button
+          type="button"
+          onClick={() => onPageChange(currentPage + 1)}
+          disabled={currentPage === totalPages}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px',
+            padding: '8px 12px',
+            borderRadius: '8px',
+            backgroundColor: currentPage === totalPages ? 'rgba(255, 255, 255, 0.03)' : 'rgba(255, 255, 255, 0.08)',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            color: currentPage === totalPages ? '#64748B' : '#F8FAFC',
+            cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            transition: 'all 0.15s ease'
+          }}
+        >
+          <span>Próxima</span>
+          <ChevronRight size={16} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
 interface CourierPortalViewProps {
   couriers: Courier[];
   deliveries: Delivery[];
@@ -379,6 +542,23 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   // Tabs: 'deliveries' (Corridas do Dia) vs 'receivables' (Extrato & Saldo Acumulado)
   const [activePortalTab, setActivePortalTab] = useState<'deliveries' | 'receivables'>('deliveries');
   const [receivablesFilter, setReceivablesFilter] = useState<'all' | 'unpaid' | 'paid'>('all');
+
+  // Pagination State
+  const DELIVERIES_PER_PAGE = 10;
+  const [deliveriesCurrentPage, setDeliveriesCurrentPage] = useState<number>(1);
+
+  const DAYS_PER_PAGE = 7;
+  const [daysCurrentPage, setDaysCurrentPage] = useState<number>(1);
+
+  // Reset pagination when dateRange or filters change
+  useEffect(() => {
+    setDeliveriesCurrentPage(1);
+    setDaysCurrentPage(1);
+  }, [dateRange]);
+
+  useEffect(() => {
+    setDaysCurrentPage(1);
+  }, [receivablesFilter]);
 
   // Daily Payments recorded by Restaurant Admin
   const [dailyPayments, setDailyPayments] = useState<any[]>([]);
@@ -829,6 +1009,14 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       return aTime >= startTime && aTime <= endTime;
     });
   }, [adjustments, dateRange]);
+
+  // Deliveries Pagination Calculations
+  const deliveriesTotalPages = Math.max(1, Math.ceil(courierDeliveries.length / DELIVERIES_PER_PAGE));
+  const safeDeliveriesCurrentPage = Math.min(deliveriesCurrentPage, deliveriesTotalPages);
+  const paginatedDeliveries = useMemo(() => {
+    const start = (safeDeliveriesCurrentPage - 1) * DELIVERIES_PER_PAGE;
+    return courierDeliveries.slice(start, start + DELIVERIES_PER_PAGE);
+  }, [courierDeliveries, safeDeliveriesCurrentPage]);
 
   const isDaniel = authenticatedCourier?.name.toLowerCase().includes('daniel') || false;
 
@@ -1704,6 +1892,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
           <h2 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: '#F8FAFC' }}>
             Suas Corridas Registradas ({courierDeliveries.length})
+            {deliveriesTotalPages > 1 && (
+              <span style={{ fontSize: '0.8rem', fontWeight: 500, color: '#94A3B8', marginLeft: '6px' }}>
+                (Pág. {safeDeliveriesCurrentPage}/{deliveriesTotalPages})
+              </span>
+            )}
           </h2>
           <span style={{ fontSize: '0.78rem', color: '#94A3B8', fontWeight: 600 }}>
             {dateRange.label || `${formatDateBR(dateRange.startDate)} ~ ${formatDateBR(dateRange.endDate)}`}
@@ -1746,7 +1939,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
         {/* Deliveries List */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {courierDeliveries.map((delivery, index) => {
+          {paginatedDeliveries.map((delivery, pageIdx) => {
+            const itemIndex = (safeDeliveriesCurrentPage - 1) * DELIVERIES_PER_PAGE + pageIdx;
             // Check if there is an active adjustment for this delivery
             const pendingAdj = dayAdjustments.find(
               (a) => a.delivery_id === delivery.id && a.status === 'pending'
@@ -1781,7 +1975,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                         fontSize: '0.98rem',
                         color: '#F8FAFC'
                       }}>
-                        #{delivery.order_number || delivery.external_order_id || `${index + 1}`}
+                        #{delivery.order_number || delivery.external_order_id || `${itemIndex + 1}`}
                       </span>
                       <span style={{ fontSize: '0.75rem', color: '#94A3B8' }}>
                         {dateRange.startDate.toDateString() === dateRange.endDate.toDateString()
@@ -2004,6 +2198,19 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             );
           })}
         </div>
+
+        {/* Deliveries Pagination */}
+        <PaginationControls
+          currentPage={safeDeliveriesCurrentPage}
+          totalPages={deliveriesTotalPages}
+          totalItems={courierDeliveries.length}
+          itemsPerPage={DELIVERIES_PER_PAGE}
+          onPageChange={(p) => {
+            setDeliveriesCurrentPage(p);
+            window.scrollTo({ top: 380, behavior: 'smooth' });
+          }}
+          itemName="corridas"
+        />
 
         {/* Pending New Deliveries Added By Courier (Awaiting Admin Confirmation) */}
         {dayAdjustments.filter((a) => a.type === 'new_delivery' && a.status === 'pending').length > 0 && (
@@ -2329,9 +2536,17 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 );
               }
 
+              const daysTotalPages = Math.max(1, Math.ceil(displayDays.length / DAYS_PER_PAGE));
+              const safeDaysCurrentPage = Math.min(daysCurrentPage, daysTotalPages);
+              const paginatedDays = displayDays.slice(
+                (safeDaysCurrentPage - 1) * DAYS_PER_PAGE,
+                safeDaysCurrentPage * DAYS_PER_PAGE
+              );
+
               return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {displayDays.map((day) => {
+                <div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {paginatedDays.map((day) => {
                     return (
                       <div
                         key={day.date}
@@ -2472,7 +2687,20 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     );
                   })}
                 </div>
-              );
+
+                <PaginationControls
+                  currentPage={safeDaysCurrentPage}
+                  totalPages={daysTotalPages}
+                  totalItems={displayDays.length}
+                  itemsPerPage={DAYS_PER_PAGE}
+                  onPageChange={(p) => {
+                    setDaysCurrentPage(p);
+                    window.scrollTo({ top: 380, behavior: 'smooth' });
+                  }}
+                  itemName="dias"
+                />
+              </div>
+            );
             })()}
           </div>
         )}
