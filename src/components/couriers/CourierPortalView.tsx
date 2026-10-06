@@ -549,6 +549,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [authenticatedCourier, setAuthenticatedCourier] = useState<Courier | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [rememberLogin, setRememberLogin] = useState<boolean>(true);
+  const hasCheckedAutoLoginRef = useRef<boolean>(false);
 
   // Operational State: inicia no dia atual em que o motoboy entra no sistema (não no mês)
   const [dateRange, setDateRange] = useState<DateRange>(() => getTodayDateRange());
@@ -933,19 +934,22 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Check saved login on mount
+  // Check saved login on mount (only once)
   useEffect(() => {
+    if (hasCheckedAutoLoginRef.current || authenticatedCourier) {
+      return;
+    }
     const savedId = localStorage.getItem('sushi_portal_courier_id');
     const savedPin = localStorage.getItem('sushi_portal_courier_pin');
-    if (savedId && savedPin) {
+    if (savedId && savedPin && internalCouriers.length > 0) {
       const found = internalCouriers.find((c) => c.id === savedId && c.is_active);
       if (found && (found.pin || '1234') === savedPin) {
+        hasCheckedAutoLoginRef.current = true;
         setAuthenticatedCourier(found);
         setSelectedCourierId(savedId);
-        setDateRange(getTodayDateRange());
       }
     }
-  }, [internalCouriers]);
+  }, [internalCouriers, authenticatedCourier]);
 
   // Handle Login Submission
   const handleLogin = (e?: React.FormEvent) => {
@@ -964,6 +968,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       return;
     }
 
+    hasCheckedAutoLoginRef.current = true;
     setAuthenticatedCourier(courier);
     setDateRange(getTodayDateRange());
     if (rememberLogin) {
@@ -974,6 +979,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   };
 
   const handleLogout = () => {
+    hasCheckedAutoLoginRef.current = false;
     setAuthenticatedCourier(null);
     localStorage.removeItem('sushi_portal_courier_id');
     localStorage.removeItem('sushi_portal_courier_pin');
