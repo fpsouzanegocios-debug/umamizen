@@ -21,7 +21,11 @@ import {
   User,
   Banknote,
   CreditCard,
-  DollarSign
+  DollarSign,
+  Wallet,
+  Receipt,
+  ArrowRight,
+  History
 } from 'lucide-react';
 import { Courier, Delivery, Order, CourierAdjustment, NeighborhoodRate } from '../../types';
 import { supabase } from '../../lib/supabase';
@@ -370,6 +374,14 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [isLoadingAdjustments, setIsLoadingAdjustments] = useState<boolean>(false);
   const [availableNeighborhoods, setAvailableNeighborhoods] = useState<NeighborhoodRate[]>(neighborhoodRates);
 
+  // Tabs: 'deliveries' (Corridas do Dia) vs 'receivables' (Extrato & Saldo Acumulado)
+  const [activePortalTab, setActivePortalTab] = useState<'deliveries' | 'receivables'>('deliveries');
+  const [receivablesFilter, setReceivablesFilter] = useState<'all' | 'unpaid' | 'paid'>('all');
+
+  // Daily Payments recorded by Restaurant Admin
+  const [dailyPayments, setDailyPayments] = useState<any[]>([]);
+  const [isLoadingPayments, setIsLoadingPayments] = useState<boolean>(false);
+
   // Orders State & Mapping for Customer Name & Payment Details
   const [internalOrders, setInternalOrders] = useState<Order[]>(orders || []);
 
@@ -557,11 +569,174 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     }
   };
 
+  // Fetch Daily Payments recorded by Restaurant for this Courier
+  const fetchDailyPayments = async () => {
+    if (!authenticatedCourier) return;
+    setIsLoadingPayments(true);
+    try {
+      const { data, error } = await supabase
+        .from('courier_daily_payments')
+        .select('*')
+        .or(`courier_id.eq.${authenticatedCourier.id},courier_name.eq.${authenticatedCourier.name}`);
+
+      if (error) {
+        console.error('Erro ao buscar pagamentos de diárias:', error);
+      } else if (data) {
+        setDailyPayments(data);
+      }
+    } catch (err) {
+      console.error('Falha ao consultar courier_daily_payments:', err);
+    } finally {
+      setIsLoadingPayments(false);
+    }
+  };
+
   useEffect(() => {
     if (authenticatedCourier) {
       fetchAdjustments();
+      fetchDailyPayments();
     }
   }, [authenticatedCourier, selectedDate]);
+
+  // All deliveries belonging to this courier across all time
+  const allCourierDeliveries = useMemo(() => {
+    if (!authenticatedCourier) return [];
+    return deliveries.filter((d) => {
+      return (
+        (d.courier_id && d.courier_id === authenticatedCourier.id) ||
+        (d.courier_name && d.courier_name.trim().toLowerCase() === authenticatedCourier.name.trim().toLowerCase())
+      );
+    });
+  }, [deliveries, authenticatedCourier]);
+
+  // Group all worked days and calculate accumulated receivables, cash and payment status
+  const receivablesHistory = useMemo(() => {
+    if (!authenticatedCourier) {
+      return {
+        days: [],
+        unpaidDays: [],
+        paidDays: [],
+        unpaidDaysCount: 0,
+        unpaidFeesTotal: 0,
+        unpaidCashTotal: 0,
+        accumulatedNetBalance: 0,
+        paidDaysCount: 0,
+        totalPaidAmount: 0
+      };
+    }
+
+    const dateSet = new Set<string>();
+    allCourierDeliveries.forEach(d => {
+      const opKey = getOperationalDateKey(d.delivery_date);
+      const k = opKey || (d.delivery_date ? d.delivery_date.split('T')[0] : '');
+      if (k) dateSet.add(k);
+    });
+
+    adjustments.forEach(a => {
+      if (a.date) dateSet.add(a.date);
+    });
+
+    dailyPayments.forEach(p => {
+      if (p.payment_date) dateSet.add(p.payment_date);
+    });
+
+    const daysList = Array.from(dateSet).map(dateStr => {
+      const dayDels = allCourierDeliveries.filter(d => {
+        const opKey = getOperationalDateKey(d.delivery_date);
+        return (opKey || d.delivery_date.split('T')[0]) === dateStr;
+      });
+
+      const dayAdjs = adjustments.filter(a => a.date === dateStr);
+
+      const removedIds = new Set(
+        dayAdjs.filter(a => a.type === 'remove_delivery' && a.status !== 'rejected')
+          .map(a => a.delivery_id)
+          .filter(Boolean)
+      );
+      const activeDeliveries = dayDels.filter(d => !removedIds.has(d.id));
+      const addedDeliveries = dayAdjs.filter(a => a.type === 'new_delivery' && a.status !== 'rejected');
+      const totalDeliveriesCount = activeDeliveries.length + addedDeliveries.length;
+
+      let dayFees = 0;
+      activeDeliveries.forEach(d => {
+        const editAdj = dayAdjs.find(a => a.type === 'edit_fee' && a.delivery_id === d.id && a.status !== 'rejected');
+        dayFees += editAdj ? Number(editAdj.proposed_fee) : Number(d.courier_fee || 0);
+      });
+      addedDeliveries.forEach(a => {
+        dayFees += Number(a.proposed_fee || 0);
+      });
+
+      let dayCash = 0;
+      activeDeliveries.forEach(d => {
+        const cashAdj = dayAdjs.find(a => a.delivery_id === d.id && a.status !== 'rejected' && a.received_cash);
+        if (cashAdj) {
+          dayCash += Number(cashAdj.received_cash);
+        } else if (d.payment_method?.toLowerCase() === 'dinheiro' || d.payment_method?.toLowerCase() === 'cash') {
+          const order = ordersMap.get(d.external_order_id) || (d.order_number ? ordersMap.get(d.order_number) : undefined);
+          dayCash += Number(d.order_amount ?? order?.gross_amount ?? 0);
+        }
+      });
+      addedDeliveries.forEach(a => {
+        if (a.received_cash) dayCash += Number(a.received_cash);
+      });
+
+      // Daily conference reported cash if any
+      const confAdj = dayAdjs.find(a => a.type === 'daily_conference');
+      if (confAdj?.received_cash && Number(confAdj.received_cash) > dayCash) {
+        dayCash = Number(confAdj.received_cash);
+      }
+
+      // Check payment record from restaurant
+      const payRecord = dailyPayments.find(p => p.payment_date === dateStr && p.is_paid === true);
+      const allDelsPaid = activeDeliveries.length > 0 && activeDeliveries.every(d => d.is_paid);
+      const isPaid = Boolean(payRecord) || allDelsPaid;
+
+      if (payRecord?.retained_cash && Number(payRecord.retained_cash) > dayCash) {
+        dayCash = Number(payRecord.retained_cash);
+      }
+
+      const netAmount = dayFees - dayCash;
+
+      return {
+        date: dateStr,
+        deliveriesCount: totalDeliveriesCount,
+        totalFees: dayFees,
+        retainedCash: dayCash,
+        netAmount,
+        isPaid,
+        payRecord,
+        adjustmentsCount: dayAdjs.length
+      };
+    })
+    .filter(d => d.deliveriesCount > 0 || d.totalFees > 0 || d.retainedCash > 0 || d.isPaid)
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+    const unpaidDays = daysList.filter(d => !d.isPaid);
+    const paidDays = daysList.filter(d => d.isPaid);
+
+    const unpaidFeesTotal = unpaidDays.reduce((sum, d) => sum + d.totalFees, 0);
+    const unpaidCashTotal = unpaidDays.reduce((sum, d) => sum + d.retainedCash, 0);
+    const accumulatedNetBalance = unpaidFeesTotal - unpaidCashTotal;
+
+    const totalPaidAmount = paidDays.reduce((sum, d) => {
+      if (d.payRecord) {
+        return sum + Number(d.payRecord.paid_amount || d.payRecord.total_paid || d.netAmount);
+      }
+      return sum + d.netAmount;
+    }, 0);
+
+    return {
+      days: daysList,
+      unpaidDays,
+      paidDays,
+      unpaidDaysCount: unpaidDays.length,
+      unpaidFeesTotal,
+      unpaidCashTotal,
+      accumulatedNetBalance,
+      paidDaysCount: paidDays.length,
+      totalPaidAmount
+    };
+  }, [allCourierDeliveries, adjustments, dailyPayments, authenticatedCourier, ordersMap]);
 
   // Filter deliveries belonging strictly to this courier on the selected date
   const courierDeliveries = useMemo(() => {
@@ -1135,8 +1310,113 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       </header>
 
       <main style={{ maxWidth: '640px', margin: '0 auto', padding: '20px 16px' }}>
-        {/* Date Selector Bar */}
+        {/* Navigation Tabs: Corridas do Dia vs Extrato & Recebimentos */}
         <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '8px',
+          backgroundColor: '#1E293B',
+          padding: '4px',
+          borderRadius: '12px',
+          marginBottom: '18px'
+        }}>
+          <button
+            type="button"
+            onClick={() => setActivePortalTab('deliveries')}
+            style={{
+              padding: '10px 14px',
+              borderRadius: '9px',
+              border: 'none',
+              backgroundColor: activePortalTab === 'deliveries' ? '#F43F5E' : 'transparent',
+              color: activePortalTab === 'deliveries' ? '#FFFFFF' : '#94A3B8',
+              fontWeight: 700,
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              transition: 'all 0.2s'
+            }}
+          >
+            <Bike size={16} />
+            <span>Corridas do Dia</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActivePortalTab('receivables')}
+            style={{
+              padding: '10px 14px',
+              borderRadius: '9px',
+              border: 'none',
+              backgroundColor: activePortalTab === 'receivables' ? '#10B981' : 'transparent',
+              color: activePortalTab === 'receivables' ? '#FFFFFF' : '#94A3B8',
+              fontWeight: 700,
+              fontSize: '0.85rem',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              transition: 'all 0.2s'
+            }}
+          >
+            <Wallet size={16} />
+            <span>Extrato de Recebimento</span>
+            {receivablesHistory.unpaidDaysCount > 0 && (
+              <span style={{
+                backgroundColor: activePortalTab === 'receivables' ? '#FFFFFF' : '#F59E0B',
+                color: activePortalTab === 'receivables' ? '#10B981' : '#0B0F19',
+                padding: '1px 6px',
+                borderRadius: '10px',
+                fontSize: '0.7rem',
+                fontWeight: 800
+              }}>
+                {receivablesHistory.unpaidDaysCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 1: CORRIDAS DO DIA */}
+        {/* ------------------------------------------------------------- */}
+        {activePortalTab === 'deliveries' && (
+          <>
+            {/* Quick Balance Pill (click to open Receivables tab) */}
+            {receivablesHistory.unpaidDaysCount > 0 && (
+              <div
+                onClick={() => setActivePortalTab('receivables')}
+                style={{
+                  backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  borderRadius: '12px',
+                  padding: '10px 14px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Wallet size={16} color="#34D399" />
+                  <span style={{ fontSize: '0.82rem', color: '#CBD5E1' }}>
+                    Saldo Acumulado Pendente ({receivablesHistory.unpaidDaysCount} dia(s) em aberto):
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <strong style={{ color: receivablesHistory.accumulatedNetBalance >= 0 ? '#34D399' : '#FB7185', fontSize: '0.92rem' }}>
+                    {formatCurrency(Math.abs(receivablesHistory.accumulatedNetBalance))}
+                  </strong>
+                  <ArrowRight size={14} color="#34D399" />
+                </div>
+              </div>
+            )}
+
+            {/* Date Selector Bar */}
+            <div style={{
           backgroundColor: '#1E293B',
           borderRadius: '14px',
           padding: '12px 16px',
@@ -1744,6 +2024,383 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   </div>
                 ))}
             </div>
+          </div>
+        )}
+          </>
+        )}
+
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 2: EXTRATO & CONTROLE DE RECEBIMENTOS ACUMULADOS */}
+        {/* ------------------------------------------------------------- */}
+        {activePortalTab === 'receivables' && (
+          <div>
+            {/* Top Accumulated Balance Card */}
+            <div style={{
+              backgroundColor: '#1E293B',
+              borderRadius: '16px',
+              padding: '20px',
+              marginBottom: '18px',
+              border: receivablesHistory.accumulatedNetBalance >= 0 
+                ? '1.5px solid rgba(16, 185, 129, 0.4)' 
+                : '1.5px solid rgba(239, 68, 68, 0.4)',
+              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.3)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{
+                    width: '44px',
+                    height: '44px',
+                    borderRadius: '12px',
+                    backgroundColor: receivablesHistory.accumulatedNetBalance >= 0 ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                    color: receivablesHistory.accumulatedNetBalance >= 0 ? '#10B981' : '#FB7185',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    <Wallet size={24} />
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: '#F8FAFC' }}>
+                      {receivablesHistory.accumulatedNetBalance >= 0 
+                        ? 'Saldo Acumulado a Receber' 
+                        : 'Valor a Repassar ao Restaurante'}
+                    </h3>
+                    <p style={{ color: '#94A3B8', fontSize: '0.8rem', margin: '2px 0 0 0' }}>
+                      {receivablesHistory.unpaidDaysCount > 0 
+                        ? `${receivablesHistory.unpaidDaysCount} dia(s) trabalhado(s) aguardando pagamento`
+                        : 'Nenhuma diária pendente de pagamento'}
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{
+                    fontSize: '1.65rem',
+                    fontWeight: 900,
+                    color: receivablesHistory.accumulatedNetBalance >= 0 ? '#34D399' : '#FB7185'
+                  }}>
+                    {formatCurrency(Math.abs(receivablesHistory.accumulatedNetBalance))}
+                  </div>
+                  <span style={{
+                    fontSize: '0.72rem',
+                    color: receivablesHistory.accumulatedNetBalance >= 0 ? '#34D399' : '#FB7185',
+                    fontWeight: 700
+                  }}>
+                    {receivablesHistory.accumulatedNetBalance >= 0 ? 'Líquido a seu favor' : 'Valor a devolver'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Breakdown Grid */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: '10px',
+                backgroundColor: 'rgba(0, 0, 0, 0.25)',
+                borderRadius: '12px',
+                padding: '12px',
+                marginTop: '10px'
+              }}>
+                <div>
+                  <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>Dias Pendentes</div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#F8FAFC', marginTop: '2px' }}>
+                    {receivablesHistory.unpaidDaysCount} {receivablesHistory.unpaidDaysCount === 1 ? 'dia' : 'dias'}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>Taxas Acumuladas</div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: '#34D399', marginTop: '2px' }}>
+                    {formatCurrency(receivablesHistory.unpaidFeesTotal)}
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>Dinheiro em Mãos</div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: receivablesHistory.unpaidCashTotal > 0 ? '#FBBF24' : '#CBD5E1', marginTop: '2px' }}>
+                    {formatCurrency(receivablesHistory.unpaidCashTotal)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Explanatory notice */}
+              <div style={{
+                marginTop: '12px',
+                padding: '8px 12px',
+                backgroundColor: 'rgba(56, 189, 248, 0.08)',
+                borderRadius: '8px',
+                borderLeft: '3px solid #38BDF8',
+                fontSize: '0.76rem',
+                color: '#CBD5E1',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <Clock size={14} color="#38BDF8" style={{ flexShrink: 0 }} />
+                <span>
+                  Quando o restaurante marcar o dia como <strong>pago</strong> no sistema, ele é <strong>automaticamente descontado</strong> deste saldo acumulado.
+                </span>
+              </div>
+            </div>
+
+            {/* Filter Pills Bar */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '14px',
+              flexWrap: 'wrap',
+              gap: '10px'
+            }}>
+              <div style={{ display: 'inline-flex', backgroundColor: '#1E293B', padding: '3px', borderRadius: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setReceivablesFilter('all')}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    backgroundColor: receivablesFilter === 'all' ? '#F43F5E' : 'transparent',
+                    color: receivablesFilter === 'all' ? '#FFFFFF' : '#94A3B8'
+                  }}
+                >
+                  Todos ({receivablesHistory.days.length})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setReceivablesFilter('unpaid')}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    backgroundColor: receivablesFilter === 'unpaid' ? '#F59E0B' : 'transparent',
+                    color: receivablesFilter === 'unpaid' ? '#0B0F19' : '#94A3B8'
+                  }}
+                >
+                  Pendentes ({receivablesHistory.unpaidDaysCount})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setReceivablesFilter('paid')}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    border: 'none',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    backgroundColor: receivablesFilter === 'paid' ? '#10B981' : 'transparent',
+                    color: receivablesFilter === 'paid' ? '#FFFFFF' : '#94A3B8'
+                  }}
+                >
+                  Pagos ({receivablesHistory.paidDaysCount})
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  fetchDailyPayments();
+                  fetchAdjustments();
+                  if (onRefreshData) onRefreshData();
+                  showToast('Extrato atualizado!');
+                }}
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: '6px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: '#CBD5E1',
+                  fontSize: '0.75rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <RefreshCw size={12} />
+                <span>Atualizar</span>
+              </button>
+            </div>
+
+            {/* Days List */}
+            {(() => {
+              const displayDays = receivablesHistory.days.filter((d) => {
+                if (receivablesFilter === 'unpaid') return !d.isPaid;
+                if (receivablesFilter === 'paid') return d.isPaid;
+                return true;
+              });
+
+              if (displayDays.length === 0) {
+                return (
+                  <div style={{
+                    backgroundColor: '#1E293B',
+                    borderRadius: '12px',
+                    padding: '36px 20px',
+                    textAlign: 'center',
+                    color: '#94A3B8'
+                  }}>
+                    <CheckCircle2 size={40} color="#10B981" style={{ margin: '0 auto 12px auto' }} />
+                    <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: '1rem' }}>
+                      {receivablesFilter === 'unpaid' ? 'Tudo em dia! Nenhum dia pendente de pagamento.' : 'Nenhum registro encontrado.'}
+                    </div>
+                    <p style={{ fontSize: '0.8rem', marginTop: '4px' }}>
+                      {receivablesFilter === 'unpaid' 
+                        ? 'Todas as suas diárias anteriores já foram pagas pelo restaurante.' 
+                        : 'Os dias trabalhados aparecerão listados aqui.'}
+                    </p>
+                  </div>
+                );
+              }
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {displayDays.map((day) => {
+                    return (
+                      <div
+                        key={day.date}
+                        style={{
+                          backgroundColor: '#1E293B',
+                          borderRadius: '12px',
+                          padding: '14px 16px',
+                          border: day.isPaid 
+                            ? '1px solid rgba(16, 185, 129, 0.3)' 
+                            : '1.5px solid rgba(245, 158, 11, 0.4)',
+                          boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <Calendar size={15} color="#38BDF8" />
+                            <span style={{ fontWeight: 800, color: '#F8FAFC', fontSize: '0.92rem' }}>
+                              {formatDateBR(new Date(day.date + 'T12:00:00'))}
+                            </span>
+                          </div>
+
+                          {/* Status Badge */}
+                          <div>
+                            {day.isPaid ? (
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                                border: '1px solid rgba(16, 185, 129, 0.35)',
+                                borderRadius: '6px',
+                                padding: '3px 8px',
+                                fontSize: '0.74rem',
+                                color: '#34D399',
+                                fontWeight: 700
+                              }}>
+                                <CheckCircle2 size={13} />
+                                <span>Pago pelo Restaurante</span>
+                              </span>
+                            ) : (
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                                border: '1px solid rgba(245, 158, 11, 0.35)',
+                                borderRadius: '6px',
+                                padding: '3px 8px',
+                                fontSize: '0.74rem',
+                                color: '#FBBF24',
+                                fontWeight: 700
+                              }}>
+                                <Clock size={13} />
+                                <span>Pendente de Pagamento</span>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Metrics Grid */}
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(4, 1fr)',
+                          gap: '8px',
+                          backgroundColor: 'rgba(0, 0, 0, 0.2)',
+                          borderRadius: '8px',
+                          padding: '10px',
+                          marginBottom: '10px'
+                        }}>
+                          <div>
+                            <div style={{ fontSize: '0.7rem', color: '#94A3B8' }}>Entregas</div>
+                            <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#F8FAFC', marginTop: '2px' }}>
+                              {day.deliveriesCount}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div style={{ fontSize: '0.7rem', color: '#94A3B8' }}>Taxas</div>
+                            <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#34D399', marginTop: '2px' }}>
+                              {formatCurrency(day.totalFees)}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div style={{ fontSize: '0.7rem', color: '#94A3B8' }}>Dinheiro</div>
+                            <div style={{ fontSize: '0.92rem', fontWeight: 800, color: day.retainedCash > 0 ? '#FBBF24' : '#CBD5E1', marginTop: '2px' }}>
+                              {formatCurrency(day.retainedCash)}
+                            </div>
+                          </div>
+
+                          <div>
+                            <div style={{ fontSize: '0.7rem', color: day.netAmount >= 0 ? '#34D399' : '#FB7185', fontWeight: 700 }}>
+                              {day.netAmount >= 0 ? 'A Receber' : 'A Devolver'}
+                            </div>
+                            <div style={{ fontSize: '0.95rem', fontWeight: 900, color: day.netAmount >= 0 ? '#34D399' : '#FB7185', marginTop: '2px' }}>
+                              {formatCurrency(Math.abs(day.netAmount))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Paid Info or View Runs Action */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', flexWrap: 'wrap', gap: '6px' }}>
+                          <div style={{ color: '#94A3B8' }}>
+                            {day.payRecord?.paid_at && (
+                              <span>Pago via {day.payRecord.payment_method || 'Pix'} em {formatDateTime(day.payRecord.paid_at)}</span>
+                            )}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedDate(day.date);
+                              setActivePortalTab('deliveries');
+                            }}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: '#38BDF8',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 0'
+                            }}
+                          >
+                            <span>Ver Corridas Deste Dia</span>
+                            <ArrowRight size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         )}
       </main>
