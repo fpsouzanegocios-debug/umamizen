@@ -29,7 +29,8 @@ import {
   ArrowRight,
   History,
   FileText,
-  Save
+  Save,
+  XCircle
 } from 'lucide-react';
 import { Courier, Delivery, Order, CourierAdjustment, NeighborhoodRate, DateRange } from '../../types';
 import { supabase } from '../../lib/supabase';
@@ -569,8 +570,10 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const DAYS_PER_PAGE = 7;
   const [daysCurrentPage, setDaysCurrentPage] = useState<number>(1);
 
-  // Reset pagination when dateRange or filters change
+  // Synchronize selectedDate with active dateRange and reset pagination
   useEffect(() => {
+    const k = getOperationalDateKey(dateRange.startDate) || dateRange.startDate.toISOString().split('T')[0];
+    setSelectedDate(k);
     setDeliveriesCurrentPage(1);
     setDaysCurrentPage(1);
   }, [dateRange]);
@@ -1065,9 +1068,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         if (a.received_cash) dayCash += Number(a.received_cash);
       });
 
-      // Daily conference reported cash if any
+      // Daily conference reported cash if any (only when there are actual deliveries or reported fees for that day)
       const confAdj = dayAdjs.find(a => a.type === 'daily_conference');
-      if (confAdj?.received_cash && Number(confAdj.received_cash) > dayCash) {
+      if ((totalDeliveriesCount > 0 || dayFees > 0) && confAdj?.received_cash && Number(confAdj.received_cash) > dayCash) {
         dayCash = Number(confAdj.received_cash);
       }
 
@@ -1093,7 +1096,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         adjustmentsCount: dayAdjs.length
       };
     })
-    .filter(d => d.deliveriesCount > 0 || d.totalFees > 0 || d.retainedCash > 0 || d.isPaid)
+    .filter(d => d.deliveriesCount > 0 || d.totalFees > 0 || d.isPaid)
     .sort((a, b) => b.date.localeCompare(a.date));
 
     const startTime = startOfDay(dateRange.startDate).getTime();
@@ -1404,6 +1407,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     e.preventDefault();
     if (!authenticatedCourier) return;
 
+    if (stats.totalCount === 0 && draftAdjustments.length === 0) {
+      alert('Não há corridas ou ajustes nesta data para enviar conferência.');
+      return;
+    }
+
     setIsSubmittingConference(true);
     try {
       // 1. If there are draft adjustments, insert them in batch to Supabase courier_adjustments!
@@ -1475,6 +1483,88 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       alert('Erro ao enviar conferência: ' + err.message);
     } finally {
       setIsSubmittingConference(false);
+    }
+  };
+
+  // Cancel Pending Daily Conference Submission
+  const [isCancellingConference, setIsCancellingConference] = useState<boolean>(false);
+
+  const handleCancelDailyConference = async () => {
+    if (!authenticatedCourier || !dailyConferenceRecord) return;
+
+    if (dailyConferenceRecord.status === 'approved') {
+      alert('Esta conferência já foi aprovada pelo restaurante e não pode ser cancelada.');
+      return;
+    }
+
+    const confirmCancel = window.confirm(
+      'Deseja realmente cancelar o envio da conferência deste dia?\n\nO restaurante não receberá mais esse fechamento e os ajustes voltarão para você poder editar novamente.'
+    );
+    if (!confirmCancel) return;
+
+    setIsCancellingConference(true);
+    try {
+      const targetDate = dailyConferenceRecord.date || selectedDate;
+
+      // 1. Fetch any pending adjustments submitted for this date to restore to drafts
+      const { data: pendingAdjs, error: fetchErr } = await supabase
+        .from('courier_adjustments')
+        .select('*')
+        .eq('courier_id', authenticatedCourier.id)
+        .eq('date', targetDate)
+        .eq('status', 'pending');
+
+      if (fetchErr) throw fetchErr;
+
+      // 2. Convert non-daily_conference adjustments back into DraftAdjustment
+      const restoredDrafts: DraftAdjustment[] = (pendingAdjs || [])
+        .filter((a) => a.type !== 'daily_conference')
+        .map((a) => ({
+          id: `restored_${a.id || Date.now()}`,
+          type: a.type as 'edit_fee' | 'new_delivery' | 'remove_delivery',
+          delivery_id: a.delivery_id || null,
+          order_number: a.order_number || null,
+          customer_name: a.customer_name || null,
+          neighborhood_name: a.neighborhood_name || null,
+          original_neighborhood: a.original_neighborhood || null,
+          proposed_neighborhood: a.proposed_neighborhood || null,
+          original_fee: Number(a.original_fee || 0),
+          proposed_fee: Number(a.proposed_fee || 0),
+          received_cash: a.received_cash ? Number(a.received_cash) : null,
+          payment_method: a.payment_method || null,
+          notes: a.notes || '',
+          saved_at: a.created_at || new Date().toISOString()
+        }));
+
+      // 3. Delete all pending adjustments (including daily_conference) for this courier and date from Supabase
+      const { error: delErr } = await supabase
+        .from('courier_adjustments')
+        .delete()
+        .eq('courier_id', authenticatedCourier.id)
+        .eq('date', targetDate)
+        .eq('status', 'pending');
+
+      if (delErr) throw delErr;
+
+      // 4. Save restored drafts into state & localStorage
+      if (restoredDrafts.length > 0) {
+        const existingIds = new Set(restoredDrafts.map((r) => r.delivery_id).filter(Boolean));
+        const merged = draftAdjustments.filter((d) => !existingIds.has(d.delivery_id)).concat(restoredDrafts);
+        saveDrafts(merged);
+      }
+
+      showToast(
+        restoredDrafts.length > 0
+          ? `Conferência cancelada com sucesso! ${restoredDrafts.length} alteração(ões) voltaram para você editar.`
+          : 'Conferência cancelada com sucesso!'
+      );
+
+      // 5. Refresh data from Supabase
+      await fetchAdjustments();
+    } catch (err: any) {
+      alert('Erro ao cancelar conferência: ' + err.message);
+    } finally {
+      setIsCancellingConference(false);
     }
   };
 
@@ -2075,25 +2165,51 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  setConferenceNote(dailyConferenceRecord.notes || '');
-                  setShowSendConferenceModal(true);
-                }}
-                style={{
-                  padding: '8px 14px',
-                  borderRadius: '8px',
-                  backgroundColor: 'rgba(245, 158, 11, 0.2)',
-                  border: '1px solid rgba(245, 158, 11, 0.4)',
-                  color: '#FBBF24',
-                  fontSize: '0.78rem',
-                  fontWeight: 700,
-                  cursor: 'pointer'
-                }}
-              >
-                Reenviar / Atualizar
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  disabled={isCancellingConference}
+                  onClick={handleCancelDailyConference}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: '8px',
+                    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                    border: '1px solid rgba(239, 68, 68, 0.35)',
+                    color: '#FB7185',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: isCancellingConference ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    transition: 'all 0.15s ease'
+                  }}
+                  title="Cancelar o envio desta conferência para editar novamente"
+                >
+                  <XCircle size={14} />
+                  <span>{isCancellingConference ? 'Cancelando...' : 'Cancelar Conferência'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConferenceNote(dailyConferenceRecord.notes || '');
+                    setShowSendConferenceModal(true);
+                  }}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: '8px',
+                    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+                    border: '1px solid rgba(245, 158, 11, 0.4)',
+                    color: '#FBBF24',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Reenviar / Atualizar
+                </button>
+              </div>
             </div>
           ) : (
             <button
