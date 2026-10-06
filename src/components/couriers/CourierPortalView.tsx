@@ -27,11 +27,12 @@ import {
   ArrowRight,
   History
 } from 'lucide-react';
-import { Courier, Delivery, Order, CourierAdjustment, NeighborhoodRate } from '../../types';
+import { Courier, Delivery, Order, CourierAdjustment, NeighborhoodRate, DateRange } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
-import { getOperationalDateKey, formatDateBR } from '../../lib/dateUtils';
+import { getOperationalDateKey, formatDateBR, getDefaultDateRange, startOfDay, endOfDay } from '../../lib/dateUtils';
 import { normalizeNeighborhoodName } from '../../lib/neighborhoodMatcher';
+import { DateRangePicker } from '../common/DateRangePicker';
 
 interface SearchableNeighborhoodSelectProps {
   value: string;
@@ -367,6 +368,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [rememberLogin, setRememberLogin] = useState<boolean>(true);
 
   // Operational State
+  const [dateRange, setDateRange] = useState<DateRange>(() => getDefaultDateRange());
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     return new Date().toISOString().split('T')[0];
   });
@@ -738,9 +740,12 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     };
   }, [allCourierDeliveries, adjustments, dailyPayments, authenticatedCourier, ordersMap]);
 
-  // Filter deliveries belonging strictly to this courier on the selected date
+  // Filter deliveries belonging strictly to this courier within the selected dateRange
   const courierDeliveries = useMemo(() => {
     if (!authenticatedCourier) return [];
+
+    const startTime = startOfDay(dateRange.startDate).getTime();
+    const endTime = endOfDay(dateRange.endDate).getTime();
 
     return deliveries.filter((d) => {
       // Must match courier by id or name
@@ -749,20 +754,27 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         (d.courier_name && d.courier_name.trim().toLowerCase() === authenticatedCourier.name.trim().toLowerCase());
 
       if (!matchesCourier) return false;
+      if (!d.delivery_date) return false;
 
-      // Match operational date
+      // Check date within range
       const opKey = getOperationalDateKey(d.delivery_date);
-      if (opKey) {
-        return opKey === selectedDate;
-      }
-      return d.delivery_date.startsWith(selectedDate);
+      const dateToCheck = opKey ? `${opKey}T12:00:00` : d.delivery_date;
+      const dTime = new Date(dateToCheck).getTime();
+      return dTime >= startTime && dTime <= endTime;
     });
-  }, [deliveries, authenticatedCourier, selectedDate]);
+  }, [deliveries, authenticatedCourier, dateRange]);
 
-  // Pending adjustments for the selected date
+  // Pending adjustments for the selected dateRange
   const dayAdjustments = useMemo(() => {
-    return adjustments.filter((a) => a.date === selectedDate);
-  }, [adjustments, selectedDate]);
+    const startTime = startOfDay(dateRange.startDate).getTime();
+    const endTime = endOfDay(dateRange.endDate).getTime();
+
+    return adjustments.filter((a) => {
+      if (!a.date) return false;
+      const aTime = new Date(`${a.date}T12:00:00`).getTime();
+      return aTime >= startTime && aTime <= endTime;
+    });
+  }, [adjustments, dateRange]);
 
   const isDaniel = authenticatedCourier?.name.toLowerCase().includes('daniel') || false;
 
@@ -1415,60 +1427,60 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
               </div>
             )}
 
-            {/* Date Selector Bar */}
+            {/* Date Selector Bar with Standard System DateRangePicker */}
             <div style={{
-          backgroundColor: '#1E293B',
-          borderRadius: '14px',
-          padding: '12px 16px',
-          marginBottom: '18px',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '10px'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94A3B8', fontSize: '0.85rem' }}>
-            <Calendar size={18} color="#F43F5E" />
-            <span style={{ fontWeight: 600 }}>Data do Fechamento:</span>
-          </div>
+              backgroundColor: '#1E293B',
+              borderRadius: '14px',
+              padding: '12px 16px',
+              marginBottom: '18px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px',
+              border: '1px solid rgba(255, 255, 255, 0.06)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94A3B8', fontSize: '0.85rem' }}>
+                <Calendar size={18} color="#F43F5E" />
+                <span style={{ fontWeight: 600, color: '#E2E8F0' }}>Período do Fechamento:</span>
+              </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              style={{
-                backgroundColor: '#0F172A',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
-                borderRadius: '8px',
-                padding: '8px 12px',
-                color: '#F8FAFC',
-                fontSize: '0.85rem',
-                outline: 'none',
-                cursor: 'pointer'
-              }}
-            />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                <DateRangePicker
+                  value={dateRange}
+                  onChange={(newRange) => {
+                    setDateRange(newRange);
+                    const s = newRange.startDate;
+                    const dateStr = `${s.getFullYear()}-${String(s.getMonth() + 1).padStart(2, '0')}-${String(s.getDate()).padStart(2, '0')}`;
+                    setSelectedDate(dateStr);
+                  }}
+                />
 
-            <button
-              onClick={() => {
-                fetchAdjustments();
-                if (onRefreshData) onRefreshData();
-                showToast('Dados atualizados!');
-              }}
-              style={{
-                padding: '8px',
-                backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                border: 'none',
-                borderRadius: '8px',
-                color: '#CBD5E1',
-                cursor: 'pointer'
-              }}
-              title="Atualizar dados"
-            >
-              <RefreshCw size={16} />
-            </button>
-          </div>
-        </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    fetchAdjustments();
+                    fetchDailyPayments();
+                    if (onRefreshData) onRefreshData();
+                    showToast('Dados atualizados!');
+                  }}
+                  style={{
+                    padding: '8px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: '8px',
+                    color: '#CBD5E1',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Atualizar dados"
+                >
+                  <RefreshCw size={16} />
+                </button>
+              </div>
+            </div>
 
         {/* Financial KPI Summary Cards */}
         <div style={{
@@ -1681,12 +1693,12 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         </div>
 
         {/* Deliveries Section Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
           <h2 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: '#F8FAFC' }}>
             Suas Corridas Registradas ({courierDeliveries.length})
           </h2>
-          <span style={{ fontSize: '0.75rem', color: '#94A3B8' }}>
-            {formatDateBR(new Date(selectedDate + 'T12:00:00'))}
+          <span style={{ fontSize: '0.78rem', color: '#94A3B8', fontWeight: 600 }}>
+            {dateRange.label || `${formatDateBR(dateRange.startDate)} ~ ${formatDateBR(dateRange.endDate)}`}
           </span>
         </div>
 
@@ -1764,7 +1776,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                         #{delivery.order_number || delivery.external_order_id || `${index + 1}`}
                       </span>
                       <span style={{ fontSize: '0.75rem', color: '#94A3B8' }}>
-                        {formatDateTime(delivery.delivery_date).split(' ')[1] || ''}
+                        {dateRange.startDate.toDateString() === dateRange.endDate.toDateString()
+                          ? (formatDateTime(delivery.delivery_date).split(' ')[1] || formatDateTime(delivery.delivery_date))
+                          : formatDateTime(delivery.delivery_date)}
                       </span>
                     </div>
 
@@ -2376,6 +2390,12 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                           <button
                             type="button"
                             onClick={() => {
+                              const targetDate = new Date(`${day.date}T12:00:00`);
+                              setDateRange({
+                                startDate: startOfDay(targetDate),
+                                endDate: endOfDay(targetDate),
+                                label: formatDateBR(targetDate)
+                              });
                               setSelectedDate(day.date);
                               setActivePortalTab('deliveries');
                             }}
@@ -3004,7 +3024,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     Enviar Conferência do Dia
                   </h3>
                   <p style={{ color: '#94A3B8', fontSize: '0.78rem', margin: 0 }}>
-                    {authenticatedCourier.name} — {formatDateBR(new Date(selectedDate + 'T12:00:00'))}
+                    {authenticatedCourier.name} — {dateRange.label || formatDateBR(new Date(selectedDate + 'T12:00:00'))}
                   </p>
                 </div>
               </div>

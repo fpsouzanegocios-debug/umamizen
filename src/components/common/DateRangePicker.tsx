@@ -292,9 +292,11 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChang
             boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05)',
             display: 'flex',
             flexDirection: 'row',
-            overflow: 'hidden',
+            flexWrap: 'wrap',
+            overflow: 'auto',
             width: '740px',
             maxWidth: '96vw',
+            maxHeight: '88vh',
             animation: 'fadeIn 0.15s ease-out'
           }}
         >
@@ -387,7 +389,7 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({ value, onChang
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
                 gap: '16px',
                 padding: '16px 20px',
                 backgroundColor: '#0F172A'
