@@ -238,6 +238,37 @@ export const App: React.FC = () => {
     }
   }, [currentUser, isCourierPortalRoute, fetchAllData]);
 
+  // Sincronização em tempo real global entre o painel administrativo e o portal do motoboy
+  useEffect(() => {
+    const channel = supabase
+      .channel('app-global-realtime-sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deliveries' }, () => {
+        supabase.from('deliveries').select('*').order('delivery_date', { ascending: false }).then(({ data }) => {
+          if (data) setDeliveries(data);
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        supabase.from('orders').select('*').order('order_date', { ascending: false }).then(({ data }) => {
+          if (data) setOrders(data);
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'couriers' }, () => {
+        supabase.from('couriers').select('*').order('name').then(({ data }) => {
+          if (data) setCouriers(data);
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'neighborhood_rates' }, () => {
+        supabase.from('neighborhood_rates').select('*').order('name').then(({ data }) => {
+          if (data) setNeighborhoodRates(data);
+        });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   // Se rota de motoboy ativa ou aba de motoboy selecionada, exibe o portal do entregador
   if (isCourierPortalRoute || activeTab === 'courier_portal') {
     return (

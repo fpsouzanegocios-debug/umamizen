@@ -560,12 +560,48 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     setDaysCurrentPage(1);
   }, [receivablesFilter]);
 
-  // Daily Payments recorded by Restaurant Admin
+  // Real-time synced internal states (kept 100% updated with restaurant main system)
+  const [internalDeliveries, setInternalDeliveries] = useState<Delivery[]>(deliveries || []);
+  const [internalCouriers, setInternalCouriers] = useState<Courier[]>(couriers || []);
+  const [internalOrders, setInternalOrders] = useState<Order[]>(orders || []);
   const [dailyPayments, setDailyPayments] = useState<any[]>([]);
   const [isLoadingPayments, setIsLoadingPayments] = useState<boolean>(false);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isLiveConnected, setIsLiveConnected] = useState<boolean>(true);
 
-  // Orders State & Mapping for Customer Name & Payment Details
-  const [internalOrders, setInternalOrders] = useState<Order[]>(orders || []);
+  // Sync props to internal state when parent props change
+  useEffect(() => {
+    if (deliveries && deliveries.length > 0) setInternalDeliveries(deliveries);
+  }, [deliveries]);
+
+  useEffect(() => {
+    if (couriers && couriers.length > 0) setInternalCouriers(couriers);
+  }, [couriers]);
+
+  useEffect(() => {
+    if (orders && orders.length > 0) setInternalOrders(orders);
+  }, [orders]);
+
+  useEffect(() => {
+    if (neighborhoodRates && neighborhoodRates.length > 0) {
+      setAvailableNeighborhoods(neighborhoodRates.filter((n) => n.is_active));
+    }
+  }, [neighborhoodRates]);
+
+  // Direct fetchers from Supabase
+  const fetchDeliveries = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('deliveries')
+        .select('*')
+        .order('delivery_date', { ascending: false });
+      if (!error && data) {
+        setInternalDeliveries(data as Delivery[]);
+      }
+    } catch (e) {
+      console.error('Erro ao sincronizar entregas:', e);
+    }
+  }, []);
 
   const fetchOrders = useCallback(async () => {
     try {
@@ -577,17 +613,158 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         setInternalOrders(data as Order[]);
       }
     } catch (e) {
-      console.error('Erro ao carregar pedidos:', e);
+      console.error('Erro ao sincronizar pedidos:', e);
     }
   }, []);
 
-  useEffect(() => {
-    if (orders && orders.length > 0) {
-      setInternalOrders(orders);
-    } else {
-      fetchOrders();
+  const fetchCouriers = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('couriers')
+        .select('*')
+        .order('name');
+      if (!error && data) {
+        setInternalCouriers(data as Courier[]);
+        setAuthenticatedCourier((curr) => {
+          if (!curr) return null;
+          const updated = (data as Courier[]).find((c) => c.id === curr.id);
+          return updated || curr;
+        });
+      }
+    } catch (e) {
+      console.error('Erro ao sincronizar motoboys:', e);
     }
-  }, [orders, fetchOrders]);
+  }, []);
+
+  const fetchNeighborhoodRates = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('neighborhood_rates')
+        .select('*')
+        .eq('is_active', true)
+        .order('name');
+      if (!error && data) {
+        setAvailableNeighborhoods(data as NeighborhoodRate[]);
+      }
+    } catch (e) {
+      console.error('Erro ao sincronizar bairros:', e);
+    }
+  }, []);
+
+  const fetchAdjustments = useCallback(async () => {
+    if (!authenticatedCourier) return;
+    setIsLoadingAdjustments(true);
+    try {
+      const { data, error } = await supabase
+        .from('courier_adjustments')
+        .select('*')
+        .eq('courier_id', authenticatedCourier.id)
+        .order('created_at', { ascending: false });
+      if (!error && data) {
+        setAdjustments(data as CourierAdjustment[]);
+      }
+    } catch (err) {
+      console.error('Erro ao buscar ajustes:', err);
+    } finally {
+      setIsLoadingAdjustments(false);
+    }
+  }, [authenticatedCourier]);
+
+  const fetchDailyPayments = useCallback(async () => {
+    if (!authenticatedCourier) return;
+    setIsLoadingPayments(true);
+    try {
+      const { data, error } = await supabase
+        .from('courier_daily_payments')
+        .select('*')
+        .or(`courier_id.eq.${authenticatedCourier.id},courier_name.eq.${authenticatedCourier.name}`);
+      if (!error && data) {
+        setDailyPayments(data);
+      }
+    } catch (err) {
+      console.error('Falha ao consultar courier_daily_payments:', err);
+    } finally {
+      setIsLoadingPayments(false);
+    }
+  }, [authenticatedCourier]);
+
+  // Master Synchronizer across all courier-related tables
+  const syncAllData = useCallback(async (silent = true) => {
+    if (!silent) setIsSyncing(true);
+    try {
+      await Promise.all([
+        fetchDeliveries(),
+        fetchOrders(),
+        fetchCouriers(),
+        fetchNeighborhoodRates(),
+        fetchAdjustments(),
+        fetchDailyPayments()
+      ]);
+    } catch (err) {
+      console.error('Erro na sincronização em tempo real:', err);
+    } finally {
+      if (!silent) setIsSyncing(false);
+    }
+  }, [fetchDeliveries, fetchOrders, fetchCouriers, fetchNeighborhoodRates, fetchAdjustments, fetchDailyPayments]);
+
+  // Realtime Subscriptions & Polling Heartbeat
+  useEffect(() => {
+    const channel = supabase
+      .channel('courier-portal-live-sync')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deliveries' }, () => {
+        fetchDeliveries();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        fetchOrders();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'courier_daily_payments' }, () => {
+        fetchDailyPayments();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'courier_adjustments' }, () => {
+        fetchAdjustments();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'neighborhood_rates' }, () => {
+        fetchNeighborhoodRates();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'couriers' }, () => {
+        fetchCouriers();
+      })
+      .subscribe((status) => {
+        setIsLiveConnected(status === 'SUBSCRIBED');
+      });
+
+    // Auto-sync a cada 10 segundos para garantir 100% dos dados frescos
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        syncAllData(true);
+      }
+    }, 10000);
+
+    // Auto-sync imediato ao focar na janela ou ligar a tela do celular
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        syncAllData(true);
+      }
+    };
+
+    window.addEventListener('focus', handleVisibility);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(interval);
+      window.removeEventListener('focus', handleVisibility);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [syncAllData, fetchDeliveries, fetchOrders, fetchDailyPayments, fetchAdjustments, fetchNeighborhoodRates, fetchCouriers]);
+
+  // Initial fetch for fresh data on mount
+  useEffect(() => {
+    fetchOrders();
+    fetchDeliveries();
+    fetchCouriers();
+    fetchNeighborhoodRates();
+  }, [fetchOrders, fetchDeliveries, fetchCouriers, fetchNeighborhoodRates]);
 
   const ordersMap = useMemo(() => {
     const map = new Map<string, Order>();
@@ -698,38 +875,20 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const savedId = localStorage.getItem('sushi_portal_courier_id');
     const savedPin = localStorage.getItem('sushi_portal_courier_pin');
     if (savedId && savedPin) {
-      const found = couriers.find((c) => c.id === savedId && c.is_active);
+      const found = internalCouriers.find((c) => c.id === savedId && c.is_active);
       if (found && (found.pin || '1234') === savedPin) {
         setAuthenticatedCourier(found);
         setSelectedCourierId(savedId);
       }
     }
-  }, [couriers]);
-
-  // Load system neighborhood rates if not provided
-  useEffect(() => {
-    if (neighborhoodRates && neighborhoodRates.length > 0) {
-      setAvailableNeighborhoods(neighborhoodRates.filter((n) => n.is_active));
-    } else {
-      supabase
-        .from('neighborhood_rates')
-        .select('*')
-        .eq('is_active', true)
-        .order('name')
-        .then(({ data, error }) => {
-          if (!error && data) {
-            setAvailableNeighborhoods(data as NeighborhoodRate[]);
-          }
-        });
-    }
-  }, [neighborhoodRates]);
+  }, [internalCouriers]);
 
   // Handle Login Submission
   const handleLogin = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setAuthError(null);
 
-    const courier = couriers.find((c) => c.id === selectedCourierId);
+    const courier = internalCouriers.find((c) => c.id === selectedCourierId);
     if (!courier) {
       setAuthError('Selecione seu nome na lista.');
       return;
@@ -756,68 +915,23 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     setEnteredPin('');
   };
 
-  // Fetch Adjustments for this Courier from Supabase
-  const fetchAdjustments = async () => {
-    if (!authenticatedCourier) return;
-    setIsLoadingAdjustments(true);
-    try {
-      const { data, error } = await supabase
-        .from('courier_adjustments')
-        .select('*')
-        .eq('courier_id', authenticatedCourier.id)
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Erro ao buscar ajustes:', error);
-      } else if (data) {
-        setAdjustments(data as CourierAdjustment[]);
-      }
-    } catch (err) {
-      console.error('Erro ao buscar ajustes:', err);
-    } finally {
-      setIsLoadingAdjustments(false);
-    }
-  };
-
-  // Fetch Daily Payments recorded by Restaurant for this Courier
-  const fetchDailyPayments = async () => {
-    if (!authenticatedCourier) return;
-    setIsLoadingPayments(true);
-    try {
-      const { data, error } = await supabase
-        .from('courier_daily_payments')
-        .select('*')
-        .or(`courier_id.eq.${authenticatedCourier.id},courier_name.eq.${authenticatedCourier.name}`);
-
-      if (error) {
-        console.error('Erro ao buscar pagamentos de diárias:', error);
-      } else if (data) {
-        setDailyPayments(data);
-      }
-    } catch (err) {
-      console.error('Falha ao consultar courier_daily_payments:', err);
-    } finally {
-      setIsLoadingPayments(false);
-    }
-  };
-
   useEffect(() => {
     if (authenticatedCourier) {
       fetchAdjustments();
       fetchDailyPayments();
     }
-  }, [authenticatedCourier, selectedDate]);
+  }, [authenticatedCourier, selectedDate, fetchAdjustments, fetchDailyPayments]);
 
   // All deliveries belonging to this courier across all time
   const allCourierDeliveries = useMemo(() => {
     if (!authenticatedCourier) return [];
-    return deliveries.filter((d) => {
+    return internalDeliveries.filter((d) => {
       return (
         (d.courier_id && d.courier_id === authenticatedCourier.id) ||
         (d.courier_name && d.courier_name.trim().toLowerCase() === authenticatedCourier.name.trim().toLowerCase())
       );
     });
-  }, [deliveries, authenticatedCourier]);
+  }, [internalDeliveries, authenticatedCourier]);
 
   // Group all worked days and calculate accumulated receivables, cash and payment status
   const receivablesHistory = useMemo(() => {
@@ -981,7 +1095,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const startTime = startOfDay(dateRange.startDate).getTime();
     const endTime = endOfDay(dateRange.endDate).getTime();
 
-    return deliveries.filter((d) => {
+    return internalDeliveries.filter((d) => {
       // Must match courier by id or name
       const matchesCourier = 
         (d.courier_id && d.courier_id === authenticatedCourier.id) ||
@@ -996,7 +1110,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       const dTime = new Date(dateToCheck).getTime();
       return dTime >= startTime && dTime <= endTime;
     });
-  }, [deliveries, authenticatedCourier, dateRange]);
+  }, [internalDeliveries, authenticatedCourier, dateRange]);
 
   // Pending adjustments for the selected dateRange
   const dayAdjustments = useMemo(() => {
@@ -1252,7 +1366,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   // SCREEN 1: LOGIN / PIN AUTHENTICATION
   // -------------------------------------------------------------
   if (!authenticatedCourier) {
-    const activeCouriers = couriers.filter((c) => c.is_active);
+    const activeCouriers = internalCouriers.filter((c) => c.is_active);
 
     return (
       <div style={{
@@ -1485,13 +1599,46 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
               <div style={{ fontSize: '1.05rem', fontWeight: 800, color: '#F8FAFC' }}>
                 {authenticatedCourier.name}
               </div>
-              <div style={{ fontSize: '0.75rem', color: '#94A3B8' }}>
-                Entregador Cadastrado
+              <div style={{ fontSize: '0.72rem', color: '#94A3B8', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span style={{
+                  display: 'inline-block',
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  backgroundColor: isLiveConnected ? '#10B981' : '#F59E0B',
+                  boxShadow: isLiveConnected ? '0 0 6px #10B981' : 'none'
+                }} />
+                <span>{isLiveConnected ? 'Ao Vivo • Sincronizado' : 'Conectando ao sistema...'}</span>
               </div>
             </div>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              onClick={() => {
+                syncAllData(false);
+                if (onRefreshData) onRefreshData();
+                showToast('Dados sincronizados com o restaurante!');
+              }}
+              style={{
+                padding: '8px 10px',
+                borderRadius: '8px',
+                backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                color: isSyncing ? '#38BDF8' : '#CBD5E1',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px'
+              }}
+              title="Sincronizar agora com o restaurante"
+            >
+              <RefreshCw size={13} style={{ transform: isSyncing ? 'rotate(180deg)' : 'none', transition: 'transform 0.4s ease' }} />
+              <span>{isSyncing ? 'Sincronizando...' : 'Atualizar'}</span>
+            </button>
+
             <button
               onClick={handleLogout}
               style={{
@@ -2482,10 +2629,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  fetchDailyPayments();
-                  fetchAdjustments();
+                  syncAllData(false);
                   if (onRefreshData) onRefreshData();
-                  showToast('Extrato atualizado!');
+                  showToast('Extrato atualizado com o restaurante!');
                 }}
                 style={{
                   padding: '6px 10px',
