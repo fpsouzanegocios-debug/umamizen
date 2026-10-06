@@ -35,7 +35,7 @@ import {
 import { Courier, Delivery, Order, CourierAdjustment, NeighborhoodRate, DateRange } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
-import { getOperationalDateKey, formatDateBR, getDefaultDateRange, startOfDay, endOfDay } from '../../lib/dateUtils';
+import { getOperationalDateKey, formatDateBR, getDefaultDateRange, getTodayDateRange, startOfDay, endOfDay } from '../../lib/dateUtils';
 import { normalizeNeighborhoodName } from '../../lib/neighborhoodMatcher';
 import { DateRangePicker } from '../common/DateRangePicker';
 
@@ -550,10 +550,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [authError, setAuthError] = useState<string | null>(null);
   const [rememberLogin, setRememberLogin] = useState<boolean>(true);
 
-  // Operational State
-  const [dateRange, setDateRange] = useState<DateRange>(() => getDefaultDateRange());
+  // Operational State: inicia no dia atual em que o motoboy entra no sistema (não no mês)
+  const [dateRange, setDateRange] = useState<DateRange>(() => getTodayDateRange());
   const [selectedDate, setSelectedDate] = useState<string>(() => {
-    return new Date().toISOString().split('T')[0];
+    const today = new Date();
+    return getOperationalDateKey(today) || today.toISOString().split('T')[0];
   });
   const [adjustments, setAdjustments] = useState<CourierAdjustment[]>([]);
   const [isLoadingAdjustments, setIsLoadingAdjustments] = useState<boolean>(false);
@@ -941,6 +942,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       if (found && (found.pin || '1234') === savedPin) {
         setAuthenticatedCourier(found);
         setSelectedCourierId(savedId);
+        setDateRange(getTodayDateRange());
       }
     }
   }, [internalCouriers]);
@@ -963,6 +965,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     }
 
     setAuthenticatedCourier(courier);
+    setDateRange(getTodayDateRange());
     if (rememberLogin) {
       localStorage.setItem('sushi_portal_courier_id', courier.id);
       localStorage.setItem('sushi_portal_courier_pin', enteredPin.trim());
@@ -975,6 +978,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     localStorage.removeItem('sushi_portal_courier_id');
     localStorage.removeItem('sushi_portal_courier_pin');
     setEnteredPin('');
+    setDateRange(getTodayDateRange());
   };
 
   useEffect(() => {

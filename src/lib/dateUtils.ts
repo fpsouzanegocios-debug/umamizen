@@ -410,6 +410,19 @@ export const getDefaultDateRange = (): DateRange => {
   };
 };
 
+/**
+ * Returns today's date range (for when couriers enter the system)
+ */
+export const getTodayDateRange = (refDate?: Date): DateRange => {
+  const now = refDate || new Date();
+  return {
+    startDate: startOfDay(now),
+    endDate: endOfDay(now),
+    label: 'Hoje',
+    presetKey: 'today'
+  };
+};
+
 export type ComparisonMode = 'calendar_day' | 'weekday';
 
 export interface PreviousPeriodResult {
