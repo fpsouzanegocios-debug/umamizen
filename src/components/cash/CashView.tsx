@@ -291,8 +291,8 @@ export const CashView: React.FC<CashViewProps> = ({
   return (
     <div className="page-container">
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
+      <div className="view-header">
+        <div className="view-header-title">
           <h1 style={{ fontSize: '1.75rem', color: '#F8FAFC', display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Wallet size={28} color="#38BDF8" />
             Fluxo de Caixa
@@ -302,7 +302,7 @@ export const CashView: React.FC<CashViewProps> = ({
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <div className="view-toolbar">
           {dateRange && onDateRangeChange && (
             <DateRangePicker value={dateRange} onChange={onDateRangeChange} />
           )}

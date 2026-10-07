@@ -587,8 +587,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   return (
     <div className="page-container">
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
+      <div className="view-header">
+        <div className="view-header-title">
           <h1 style={{ fontSize: '1.75rem', color: '#F8FAFC', display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Receipt size={28} color="#FBBF24" />
             Insumos & Contas a Pagar
@@ -598,7 +598,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <div className="view-toolbar">
           {dateRange && onDateRangeChange && (
             <DateRangePicker value={dateRange} onChange={onDateRangeChange} />
           )}

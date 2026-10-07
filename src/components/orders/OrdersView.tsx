@@ -217,15 +217,15 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   return (
     <div className="page-container">
       {/* Top Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
+      <div className="view-header">
+        <div className="view-header-title">
           <h1 style={{ fontSize: '1.75rem', color: '#F8FAFC' }}>Gestão de Pedidos</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
             Consulte, audite e edite pedidos importados com recálculo automático de taxas
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+        <div className="view-toolbar">
           {onOpenImport && (
             <button
               type="button"

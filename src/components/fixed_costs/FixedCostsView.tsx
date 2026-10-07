@@ -408,8 +408,8 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
   return (
     <div className="page-container">
       {/* Top Header & Filters */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
+      <div className="view-header">
+        <div className="view-header-title">
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div style={{
               width: '38px',
@@ -433,7 +433,7 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
         </div>
 
         {/* Action Buttons & Date Range */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <div className="view-toolbar">
           {dateRange && onDateRangeChange && (
             <DateRangePicker value={dateRange} onChange={onDateRangeChange} />
           )}

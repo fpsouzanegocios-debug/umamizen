@@ -764,8 +764,8 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   return (
     <div className="page-container">
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
+      <div className="view-header">
+        <div className="view-header-title">
           <h1 style={{ fontSize: '1.75rem', color: '#F8FAFC', display: 'flex', alignItems: 'center', gap: '10px' }}>
             <Bike size={28} color="#F43F5E" />
             Controle de Motoboys e Entregas
@@ -775,7 +775,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <div className="view-toolbar">
           {dateRange && onDateRangeChange && (
             <DateRangePicker value={dateRange} onChange={onDateRangeChange} />
           )}
@@ -784,7 +784,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             className="select"
             value={selectedCourierName}
             onChange={(e) => setSelectedCourierName(e.target.value)}
-            style={{ width: '180px' }}
+            style={{ minWidth: '150px' }}
           >
             <option value="all">Todos os Motoboys</option>
             {couriers.map((c) => (
@@ -794,12 +794,40 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             ))}
           </select>
 
+          {/* Portal Share Button */}
+          <button
+            type="button"
+            onClick={() => setShowPortalShareModal(true)}
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            title="Abrir ou compartilhar link do Portal do Motoboy para celular"
+          >
+            <Smartphone size={16} color="#38BDF8" />
+            <span>Portal do Motoboy</span>
+          </button>
+
+          <button type="button" onClick={() => setShowAddModal(true)} className="btn btn-secondary">
+            <Plus size={15} />
+            <span>Cadastrar Motoboy</span>
+          </button>
+
+          <button 
+            type="button"
+            onClick={() => setShowAddDeliveryModal(true)} 
+            className="btn btn-primary full-width-mobile"
+            style={{ backgroundColor: '#F43F5E', borderColor: '#F43F5E' }}
+            title="Lançar retorno ao cliente, corrida avulsa ou viagem extra"
+          >
+            <RotateCcw size={15} />
+            <span>+ Adicionar Entrega (Retorno)</span>
+          </button>
+
           {/* Pending Adjustments Button */}
           {pendingAdjustmentsCount > 0 && (
             <button
               type="button"
               onClick={() => setShowAdjustmentsModal(true)}
-              className="btn btn-primary"
+              className="btn btn-primary full-width-mobile"
               style={{
                 backgroundColor: '#F59E0B',
                 borderColor: '#F59E0B',
@@ -815,34 +843,6 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
               <span>Conferir Ajustes ({pendingAdjustmentsCount})</span>
             </button>
           )}
-
-          {/* Portal Share Button */}
-          <button
-            type="button"
-            onClick={() => setShowPortalShareModal(true)}
-            className="btn btn-secondary"
-            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-            title="Abrir ou compartilhar link do Portal do Motoboy para celular"
-          >
-            <Smartphone size={16} color="#38BDF8" />
-            <span>Portal do Motoboy</span>
-          </button>
-
-          <button 
-            type="button"
-            onClick={() => setShowAddDeliveryModal(true)} 
-            className="btn btn-primary"
-            style={{ backgroundColor: '#F43F5E', borderColor: '#F43F5E' }}
-            title="Lançar retorno ao cliente, corrida avulsa ou viagem extra"
-          >
-            <RotateCcw size={15} />
-            <span>+ Adicionar Entrega (Retorno)</span>
-          </button>
-
-          <button type="button" onClick={() => setShowAddModal(true)} className="btn btn-secondary">
-            <Plus size={15} />
-            <span>Cadastrar Motoboy</span>
-          </button>
         </div>
       </div>
 
@@ -907,31 +907,31 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             <span className="badge badge-info">{selectedCourierName === 'all' ? 'Todos' : selectedCourierName}</span>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', marginTop: '12px', marginBottom: '14px' }}>
-            <div style={{ backgroundColor: 'var(--bg-input)', padding: '10px 12px', borderRadius: '8px' }}>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Total Corridas</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 700 }}>{courierStats.totalDeliveries}</div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+          <div className="kpi-mini-grid" style={{ marginTop: '12px', marginBottom: '14px' }}>
+            <div className="kpi-mini-box">
+              <div className="kpi-mini-label" style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Total Corridas</div>
+              <div className="kpi-mini-val" style={{ fontSize: '1.25rem', fontWeight: 700 }}>{courierStats.totalDeliveries}</div>
+              <div className="kpi-mini-sub" style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                 Base: {formatCurrency(courierStats.baseTotal)}
               </div>
             </div>
-            <div style={{ backgroundColor: 'var(--bg-input)', padding: '10px 12px', borderRadius: '8px' }}>
-              <div style={{ fontSize: '0.72rem', color: '#10B981', fontWeight: 600 }}>JÁ PAGO (DIÁRIAS)</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#10B981' }}>
+            <div className="kpi-mini-box">
+              <div className="kpi-mini-label" style={{ fontSize: '0.72rem', color: '#10B981', fontWeight: 600 }}>JÁ PAGO</div>
+              <div className="kpi-mini-val" style={{ fontSize: '1.25rem', fontWeight: 700, color: '#10B981' }}>
                 {formatCurrency(courierStats.totalPaid)}
               </div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                {courierStats.paidDeliveriesCount} entregas quitadas
+              <div className="kpi-mini-sub" style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                {courierStats.paidDeliveriesCount} quitadas
               </div>
             </div>
-            <div style={{ backgroundColor: 'var(--bg-input)', padding: '10px 12px', borderRadius: '8px' }}>
-              <div style={{ fontSize: '0.72rem', color: courierStats.pendingToPay > 0 ? '#FBBF24' : '#10B981', fontWeight: 600 }}>
-                SALDO PENDENTE
+            <div className="kpi-mini-box">
+              <div className="kpi-mini-label" style={{ fontSize: '0.72rem', color: courierStats.pendingToPay > 0 ? '#FBBF24' : '#10B981', fontWeight: 600 }}>
+                PENDENTE
               </div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: courierStats.pendingToPay > 0 ? '#FBBF24' : '#10B981' }}>
+              <div className="kpi-mini-val" style={{ fontSize: '1.25rem', fontWeight: 800, color: courierStats.pendingToPay > 0 ? '#FBBF24' : '#10B981' }}>
                 {formatCurrency(courierStats.pendingToPay)}
               </div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+              <div className="kpi-mini-sub" style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                 {courierStats.pendingDeliveriesCount} a acertar
               </div>
             </div>
@@ -944,17 +944,19 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             padding: '12px 14px',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between'
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '8px'
           }}>
             <div>
               <span style={{ fontSize: '0.8rem', color: courierStats.pendingToPay > 0 ? '#FBBF24' : '#34D399', fontWeight: 700 }}>
                 {courierStats.pendingToPay > 0 ? 'SALDO A PAGAR AO MOTOBOY (PENDENTE):' : 'TODAS AS DIÁRIAS PAGAS NO PERÍODO:'}
               </span>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                 Total gerado: {formatCurrency(courierStats.totalGross)} | Descontado pago: -{formatCurrency(courierStats.totalPaid)}
               </div>
             </div>
-            <div style={{ fontSize: '1.6rem', fontWeight: 800, color: courierStats.pendingToPay > 0 ? '#FBBF24' : '#34D399' }}>
+            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: courierStats.pendingToPay > 0 ? '#FBBF24' : '#34D399' }}>
               {formatCurrency(courierStats.pendingToPay)}
             </div>
           </div>

@@ -588,8 +588,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   return (
     <div className="page-container">
       {/* Top Welcome & Quick Actions (Section 29) */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '14px' }}>
-        <div>
+      <div className="view-header">
+        <div className="view-header-title">
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <h1 style={{ fontSize: '1.85rem', color: '#F8FAFC' }}>Painel Executivo</h1>
             <span className="badge badge-success">Operação Ao Vivo</span>
@@ -600,7 +600,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Quick Actions Buttons */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+        <div className="view-toolbar">
           {dateRange && onDateRangeChange && (
             <DateRangePicker value={dateRange} onChange={onDateRangeChange} />
           )}
@@ -636,12 +636,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           padding: '14px 18px',
           marginBottom: '24px'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', color: '#FBBF24', fontWeight: 700, fontSize: '0.9rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', color: '#FBBF24', fontWeight: 700, fontSize: '0.9rem' }}>
             <ShieldAlert size={18} />
             <span>PRECISA DA SUA ATENÇÃO ({alerts.length}):</span>
           </div>
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+          <div className="dashboard-alerts-grid">
             {alerts.map((al) => (
               <button
                 key={al.id}

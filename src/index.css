@@ -392,4 +392,190 @@ select.select option,
   background: rgba(148, 163, 184, 0.45);
 }
 
+/* ========================================================
+   RESPONSIVE MOBILE SYSTEM ENHANCEMENTS
+   ======================================================== */
+
+/* Header Desktop vs Mobile */
+.header-desktop-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-desktop-datepicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-mobile-right {
+  display: none;
+}
+
+.header-mobile-brand {
+  display: none;
+}
+
+@media (max-width: 1023px) {
+  .header-desktop-actions {
+    display: none !important;
+  }
+  .header-desktop-datepicker {
+    display: none !important;
+  }
+  .header-mobile-right {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+  }
+  .header-mobile-brand {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+  }
+}
+
+/* Page View Headers & Toolbars */
+.view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 22px;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.view-header-title {
+  min-width: 240px;
+}
+
+.view-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .view-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 14px !important;
+    margin-bottom: 18px !important;
+  }
+
+  .view-header-title h1 {
+    font-size: 1.45rem !important;
+  }
+
+  .view-header-title p {
+    font-size: 0.8rem !important;
+  }
+
+  .view-toolbar {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+    width: 100% !important;
+  }
+
+  .view-toolbar > * {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .view-toolbar .btn,
+  .view-toolbar .select,
+  .view-toolbar > div > .btn {
+    width: 100% !important;
+    justify-content: center !important;
+    text-align: center !important;
+    padding: 8px 10px !important;
+    font-size: 0.82rem !important;
+    box-sizing: border-box !important;
+  }
+
+  .view-toolbar .full-width-mobile {
+    grid-column: 1 / -1 !important;
+  }
+}
+
+/* Dashboard Attention Alerts Grid */
+.dashboard-alerts-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .dashboard-alerts-grid {
+    flex-direction: column !important;
+    gap: 6px !important;
+  }
+
+  .dashboard-alerts-grid .btn {
+    width: 100% !important;
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    text-align: left !important;
+    padding: 10px 14px !important;
+    font-size: 0.82rem !important;
+  }
+}
+
+/* Mini KPI Grid for Financial Cards */
+.kpi-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.kpi-mini-box {
+  background-color: var(--bg-input);
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+@media (max-width: 640px) {
+  .kpi-mini-grid {
+    gap: 6px !important;
+  }
+
+  .kpi-mini-box {
+    padding: 8px 6px !important;
+  }
+
+  .kpi-mini-box .kpi-mini-label {
+    font-size: 0.65rem !important;
+    letter-spacing: -0.01em !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .kpi-mini-box .kpi-mini-val {
+    font-size: 1.05rem !important;
+    letter-spacing: -0.02em !important;
+  }
+
+  .kpi-mini-box .kpi-mini-sub {
+    font-size: 0.62rem !important;
+    line-height: 1.2 !important;
+  }
+}
+
+/* Animation for Slide Up Sheet */
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
 
