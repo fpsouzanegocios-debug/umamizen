@@ -885,6 +885,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [showSendConferenceModal, setShowSendConferenceModal] = useState<boolean>(false);
   const [conferenceNote, setConferenceNote] = useState<string>('');
   const [isSubmittingConference, setIsSubmittingConference] = useState<boolean>(false);
+  const [isCancellingAdjustment, setIsCancellingAdjustment] = useState<string | null>(null);
 
   // Draft Adjustments: Saved locally before sending batch in daily conference
   const [draftAdjustments, setDraftAdjustments] = useState<DraftAdjustment[]>([]);
@@ -1281,6 +1282,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     setEditingDelivery(delivery);
 
     const existingDraft = draftAdjustments.find((a) => a.delivery_id === delivery.id);
+    const existingPending = dayAdjustments.find((a) => a.delivery_id === delivery.id && a.status === 'pending');
 
     if (existingDraft) {
       setProposedNeighborhood(existingDraft.proposed_neighborhood || delivery.neighborhood_name || '');
@@ -1288,6 +1290,12 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       setEditNote(existingDraft.notes || '');
       setIsCashPayment(existingDraft.received_cash !== null && existingDraft.received_cash !== undefined ? true : (forceCash || false));
       setCashAmount(existingDraft.received_cash ? String(existingDraft.received_cash) : '');
+    } else if (existingPending) {
+      setProposedNeighborhood(existingPending.proposed_neighborhood || delivery.neighborhood_name || '');
+      setProposedFee(String(existingPending.proposed_fee));
+      setEditNote(existingPending.notes || '');
+      setIsCashPayment(existingPending.received_cash !== null && existingPending.received_cash !== undefined ? true : (forceCash || false));
+      setCashAmount(existingPending.received_cash ? String(existingPending.received_cash) : '');
     } else {
       setProposedNeighborhood(delivery.neighborhood_name || '');
       setProposedFee(String(delivery.courier_fee || 8.00));
@@ -1575,6 +1583,44 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       alert('Erro ao cancelar conferência: ' + err.message);
     } finally {
       setIsCancellingConference(false);
+    }
+  };
+
+  // Cancel individual requested adjustment
+  const handleCancelAdjustment = async (adjustmentId: string) => {
+    const adj = adjustments.find((a) => a.id === adjustmentId);
+    if (!adj) return;
+
+    const confirmCancel = window.confirm(
+      'Deseja realmente cancelar esta solicitação de ajuste?\n\nA corrida voltará para o valor e dados originais do sistema.'
+    );
+    if (!confirmCancel) return;
+
+    setIsCancellingAdjustment(adjustmentId);
+    try {
+      const { error } = await supabase
+        .from('courier_adjustments')
+        .delete()
+        .eq('id', adjustmentId)
+        .eq('status', 'pending');
+
+      if (error) throw error;
+
+      // Se esse ajuste era da entrega aberta no modal de edição, fecha o modal
+      if (editingDelivery && adj.delivery_id === editingDelivery.id) {
+        setEditingDelivery(null);
+      }
+
+      setAdjustments((prev) => prev.filter((a) => a.id !== adjustmentId));
+      showToast('Solicitação de ajuste cancelada com sucesso!');
+
+      // Sincroniza os ajustes frescos do Supabase
+      await fetchAdjustments();
+    } catch (err: any) {
+      console.error('Erro ao cancelar solicitação de ajuste:', err);
+      showToast('Erro ao cancelar ajuste. Tente novamente.');
+    } finally {
+      setIsCancellingAdjustment(null);
     }
   };
 
@@ -2681,14 +2727,45 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     color: '#FBBF24',
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'space-between'
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                    flexWrap: 'wrap'
                   }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Clock size={14} />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1 }}>
+                      <Clock size={14} style={{ flexShrink: 0 }} />
                       <span>
-                        Ajuste solicitado para <strong>{formatCurrency(pendingAdj.proposed_fee)}</strong> (Aguardando OK do restaurante)
+                        {pendingAdj.type === 'remove_delivery' ? (
+                          <>Remoção solicitada (Aguardando OK do restaurante)</>
+                        ) : (
+                          <>Ajuste solicitado para <strong>{formatCurrency(pendingAdj.proposed_fee)}</strong> (Aguardando OK do restaurante)</>
+                        )}
                       </span>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleCancelAdjustment(pendingAdj.id)}
+                      disabled={isCancellingAdjustment === pendingAdj.id}
+                      style={{
+                        backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                        border: '1px solid rgba(239, 68, 68, 0.35)',
+                        borderRadius: '6px',
+                        color: '#F87171',
+                        padding: '4px 10px',
+                        fontSize: '0.74rem',
+                        fontWeight: 600,
+                        cursor: isCancellingAdjustment === pendingAdj.id ? 'not-allowed' : 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        flexShrink: 0,
+                        transition: 'all 0.15s'
+                      }}
+                      title="Cancelar solicitação de ajuste desta corrida"
+                    >
+                      <X size={13} />
+                      <span>{isCancellingAdjustment === pendingAdj.id ? 'Cancelando...' : 'Cancelar Ajuste'}</span>
+                    </button>
                   </div>
                 )}
 
@@ -2852,11 +2929,35 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                         {adj.notes || 'Corrida avulsa informada'}
                       </div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
+                    <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
                       <div style={{ fontSize: '1rem', fontWeight: 800, color: '#34D399' }}>
                         {formatCurrency(adj.proposed_fee)}
                       </div>
-                      <span style={{ fontSize: '0.7rem', color: '#FBBF24' }}>Pendente</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.7rem', color: '#FBBF24' }}>Pendente</span>
+                        <button
+                          type="button"
+                          onClick={() => handleCancelAdjustment(adj.id)}
+                          disabled={isCancellingAdjustment === adj.id}
+                          style={{
+                            backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                            border: '1px solid rgba(239, 68, 68, 0.35)',
+                            borderRadius: '6px',
+                            color: '#F87171',
+                            padding: '2px 8px',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            cursor: isCancellingAdjustment === adj.id ? 'not-allowed' : 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}
+                          title="Cancelar esta corrida adicionada"
+                        >
+                          <X size={11} />
+                          <span>{isCancellingAdjustment === adj.id ? 'Cancelando...' : 'Cancelar'}</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -3520,6 +3621,33 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     </button>
                   );
                 })()}
+                {(() => {
+                  const existingPending = dayAdjustments.find((a) => a.delivery_id === editingDelivery.id && a.status === 'pending');
+                  if (!existingPending) return null;
+                  return (
+                    <button
+                      type="button"
+                      disabled={isCancellingAdjustment === existingPending.id}
+                      onClick={() => handleCancelAdjustment(existingPending.id)}
+                      style={{
+                        padding: '12px 14px',
+                        backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        borderRadius: '10px',
+                        color: '#FB7185',
+                        fontSize: '0.85rem',
+                        fontWeight: 600,
+                        cursor: isCancellingAdjustment === existingPending.id ? 'not-allowed' : 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px'
+                      }}
+                    >
+                      <X size={15} />
+                      <span>{isCancellingAdjustment === existingPending.id ? 'Cancelando...' : 'Cancelar Solicitação'}</span>
+                    </button>
+                  );
+                })()}
                 <button
                   type="button"
                   onClick={() => setEditingDelivery(null)}
@@ -4097,11 +4225,36 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 <div style={{ color: '#CBD5E1', fontWeight: 700, marginBottom: '6px' }}>
                   Ajustes enviados anteriormente neste dia:
                 </div>
-                <ul style={{ margin: 0, paddingLeft: '16px', color: '#94A3B8', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <ul style={{ margin: 0, padding: 0, listStyle: 'none', color: '#94A3B8', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {dayAdjustments.filter(a => a.type !== 'daily_conference').map(adj => (
-                    <li key={adj.id}>
-                      <strong style={{ color: '#F8FAFC' }}>#{adj.order_number || 'S/N'}</strong>: {adj.type === 'edit_fee' ? `Taxa ${formatCurrency(adj.proposed_fee)}` : adj.type === 'new_delivery' ? 'Corrida faltante' : 'Remoção'}
-                      {adj.received_cash ? ` (Dinheiro: ${formatCurrency(adj.received_cash)})` : ''}
+                    <li key={adj.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', backgroundColor: 'rgba(0, 0, 0, 0.2)', padding: '6px 10px', borderRadius: '6px' }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <strong style={{ color: '#F8FAFC' }}>#{adj.order_number || 'S/N'}</strong>: {adj.type === 'edit_fee' ? `Taxa ${formatCurrency(adj.proposed_fee)}` : adj.type === 'new_delivery' ? 'Corrida faltante' : 'Remoção'}
+                        {adj.received_cash ? ` (Dinheiro: ${formatCurrency(adj.received_cash)})` : ''}
+                        <span style={{ marginLeft: '6px', fontSize: '0.72rem', color: adj.status === 'approved' ? '#34D399' : adj.status === 'rejected' ? '#FB7185' : '#FBBF24' }}>
+                          ({adj.status === 'approved' ? 'Aprovado' : adj.status === 'rejected' ? 'Recusado' : 'Aguardando Aprovação'})
+                        </span>
+                      </div>
+                      {adj.status === 'pending' && (
+                        <button
+                          type="button"
+                          onClick={() => handleCancelAdjustment(adj.id)}
+                          disabled={isCancellingAdjustment === adj.id}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#FB7185',
+                            cursor: isCancellingAdjustment === adj.id ? 'not-allowed' : 'pointer',
+                            fontSize: '0.74rem',
+                            fontWeight: 600,
+                            textDecoration: 'underline',
+                            padding: '2px 6px',
+                            flexShrink: 0
+                          }}
+                        >
+                          {isCancellingAdjustment === adj.id ? 'Cancelando...' : 'Cancelar'}
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>
