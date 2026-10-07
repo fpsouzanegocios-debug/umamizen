@@ -1310,8 +1310,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     }
   };
 
-  // Save Rate / Payment Edit locally in Drafts (does NOT send individually to Supabase)
-  const handleSubmitEditFee = (e: React.FormEvent) => {
+  // Submit Rate / Payment Edit directly to Supabase for restaurant confirmation
+  const handleSubmitEditFee = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingDelivery || !authenticatedCourier) return;
 
@@ -1325,37 +1325,49 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const finalCustName = getCustomerName(editingDelivery);
     const parsedCash = isCashPayment ? parseFloat(cashAmount.replace(',', '.')) : null;
 
-    const newDraft: DraftAdjustment = {
-      id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      type: 'edit_fee',
-      delivery_id: editingDelivery.id,
-      order_number: editingDelivery.order_number || editingDelivery.external_order_id,
-      customer_name: finalCustName,
-      received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
-      payment_method: isCashPayment ? 'Dinheiro' : null,
-      neighborhood_name: finalNeighborhood || 'Bairro não especificado',
-      original_neighborhood: editingDelivery.neighborhood_name || '',
-      proposed_neighborhood: finalNeighborhood,
-      original_fee: Number(editingDelivery.courier_fee || 0),
-      proposed_fee: proposed,
-      notes: editNote.trim() || (isCashPayment ? `Informado pagamento em dinheiro: R$ ${parsedCash || 0}` : (finalNeighborhood !== editingDelivery.neighborhood_name ? `Bairro alterado para ${finalNeighborhood}` : 'Ajuste de taxa solicitado pelo motoboy')),
-      saved_at: new Date().toISOString()
-    };
+    setIsSubmittingEdit(true);
+    try {
+      const targetDate = getOperationalDateKey(editingDelivery.delivery_date) || selectedDate;
+      const { error } = await supabase.from('courier_adjustments').insert({
+        courier_id: authenticatedCourier.id,
+        courier_name: authenticatedCourier.name,
+        delivery_id: editingDelivery.id,
+        date: targetDate,
+        type: 'edit_fee',
+        order_number: editingDelivery.order_number || editingDelivery.external_order_id,
+        customer_name: finalCustName,
+        received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
+        payment_method: isCashPayment ? 'Dinheiro' : null,
+        neighborhood_name: finalNeighborhood || 'Bairro não especificado',
+        original_neighborhood: editingDelivery.neighborhood_name || '',
+        proposed_neighborhood: finalNeighborhood,
+        original_fee: Number(editingDelivery.courier_fee || 0),
+        proposed_fee: proposed,
+        notes: editNote.trim() || (isCashPayment ? `Informado pagamento em dinheiro: R$ ${parsedCash || 0}` : (finalNeighborhood !== editingDelivery.neighborhood_name ? `Bairro alterado para ${finalNeighborhood}` : 'Ajuste de taxa solicitado pelo motoboy')),
+        status: 'pending'
+      });
 
-    const nextDrafts = draftAdjustments.filter((a) => a.delivery_id !== editingDelivery.id).concat(newDraft);
-    saveDrafts(nextDrafts);
+      if (error) throw error;
 
-    showToast('Alteração salva com sucesso! Você pode ajustar outros pedidos e depois enviar tudo junto no fechamento.');
-    setEditingDelivery(null);
-    setProposedNeighborhood('');
-    setProposedFee('');
-    setEditNote('');
-    setIsCashPayment(false);
-    setCashAmount('');
+      saveDrafts(draftAdjustments.filter((a) => a.delivery_id !== editingDelivery.id));
+      showToast('Solicitação de ajuste enviada ao restaurante com sucesso!');
+      setEditingDelivery(null);
+      setProposedNeighborhood('');
+      setProposedFee('');
+      setEditNote('');
+      setIsCashPayment(false);
+      setCashAmount('');
+      await fetchAdjustments();
+    } catch (err: any) {
+      console.error('Erro ao enviar solicitação de ajuste:', err);
+      showToast('Erro ao enviar ajuste: ' + (err.message || 'Erro desconhecido'));
+    } finally {
+      setIsSubmittingEdit(false);
+    }
   };
 
-  // Save New Missing Delivery locally in Drafts
-  const handleSubmitNewDelivery = (e: React.FormEvent) => {
+  // Submit New Missing Delivery directly to Supabase for restaurant confirmation
+  const handleSubmitNewDelivery = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!authenticatedCourier) return;
 
@@ -1367,57 +1379,80 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
     const parsedCash = newIsCash ? parseFloat(newCashAmount.replace(',', '.')) : null;
 
-    const newDraft: DraftAdjustment = {
-      id: `draft_new_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      type: 'new_delivery',
-      delivery_id: null,
-      order_number: newOrderNumber.trim() || 'AVULSO',
-      customer_name: newCustomerName.trim() || null,
-      received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
-      payment_method: newIsCash ? 'Dinheiro' : null,
-      neighborhood_name: newNeighborhood.trim() || 'Bairro a confirmar',
-      original_fee: 0,
-      proposed_fee: fee,
-      notes: newNote.trim() || (newIsCash ? `Corrida avulsa com dinheiro recebido: R$ ${parsedCash || 0}` : 'Corrida faltante adicionada pelo motoboy'),
-      saved_at: new Date().toISOString()
-    };
+    setIsSubmittingNew(true);
+    try {
+      const { error } = await supabase.from('courier_adjustments').insert({
+        courier_id: authenticatedCourier.id,
+        courier_name: authenticatedCourier.name,
+        date: selectedDate,
+        type: 'new_delivery',
+        delivery_id: null,
+        order_number: newOrderNumber.trim() || 'AVULSO',
+        customer_name: newCustomerName.trim() || null,
+        received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
+        payment_method: newIsCash ? 'Dinheiro' : null,
+        neighborhood_name: newNeighborhood.trim() || 'Bairro a confirmar',
+        original_fee: 0,
+        proposed_fee: fee,
+        notes: newNote.trim() || (newIsCash ? `Corrida avulsa com dinheiro recebido: R$ ${parsedCash || 0}` : 'Corrida faltante adicionada pelo motoboy'),
+        status: 'pending'
+      });
 
-    saveDrafts([...draftAdjustments, newDraft]);
+      if (error) throw error;
 
-    showToast('Corrida faltante salva! Ela será enviada junto no relatório de conferência.');
-    setShowAddDeliveryModal(false);
-    setNewOrderNumber('');
-    setNewCustomerName('');
-    setNewNeighborhood('');
-    setNewFee('8.00');
-    setNewIsCash(false);
-    setNewCashAmount('');
-    setNewNote('');
+      showToast('Corrida adicionada e enviada para aprovação do restaurante!');
+      setShowAddDeliveryModal(false);
+      setNewOrderNumber('');
+      setNewCustomerName('');
+      setNewNeighborhood('');
+      setNewFee('8.00');
+      setNewIsCash(false);
+      setNewCashAmount('');
+      setNewNote('');
+      await fetchAdjustments();
+    } catch (err: any) {
+      console.error('Erro ao adicionar corrida:', err);
+      showToast('Erro ao adicionar corrida: ' + (err.message || 'Erro desconhecido'));
+    } finally {
+      setIsSubmittingNew(false);
+    }
   };
 
-  // Save Delivery Removal locally in Drafts
-  const handleSubmitDeleteRequest = (e: React.FormEvent) => {
+  // Submit Delivery Removal directly to Supabase for restaurant confirmation
+  const handleSubmitDeleteRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!deletingDelivery || !authenticatedCourier) return;
 
-    const newDraft: DraftAdjustment = {
-      id: `draft_del_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      type: 'remove_delivery',
-      delivery_id: deletingDelivery.id,
-      order_number: deletingDelivery.order_number || deletingDelivery.external_order_id,
-      neighborhood_name: deletingDelivery.neighborhood_name || '',
-      original_fee: Number(deletingDelivery.courier_fee || 0),
-      proposed_fee: 0,
-      notes: deleteNote.trim() || 'Motoboy informou que não realizou esta corrida',
-      saved_at: new Date().toISOString()
-    };
+    setIsSubmittingDelete(true);
+    try {
+      const targetDate = getOperationalDateKey(deletingDelivery.delivery_date) || selectedDate;
+      const { error } = await supabase.from('courier_adjustments').insert({
+        courier_id: authenticatedCourier.id,
+        courier_name: authenticatedCourier.name,
+        delivery_id: deletingDelivery.id,
+        date: targetDate,
+        type: 'remove_delivery',
+        order_number: deletingDelivery.order_number || deletingDelivery.external_order_id,
+        neighborhood_name: deletingDelivery.neighborhood_name || '',
+        original_fee: Number(deletingDelivery.courier_fee || 0),
+        proposed_fee: 0,
+        notes: deleteNote.trim() || 'Motoboy informou que não realizou esta corrida',
+        status: 'pending'
+      });
 
-    const nextDrafts = draftAdjustments.filter((a) => a.delivery_id !== deletingDelivery.id).concat(newDraft);
-    saveDrafts(nextDrafts);
+      if (error) throw error;
 
-    showToast('Solicitação de remoção salva! Será enviada junto na conferência.');
-    setDeletingDelivery(null);
-    setDeleteNote('');
+      saveDrafts(draftAdjustments.filter((a) => a.delivery_id !== deletingDelivery.id));
+      showToast('Solicitação de remoção enviada ao restaurante com sucesso!');
+      setDeletingDelivery(null);
+      setDeleteNote('');
+      await fetchAdjustments();
+    } catch (err: any) {
+      console.error('Erro ao solicitar remoção:', err);
+      showToast('Erro ao enviar solicitação: ' + (err.message || 'Erro desconhecido'));
+    } finally {
+      setIsSubmittingDelete(false);
+    }
   };
 
   // Submit Full Day Conference + ALL Draft Adjustments in Batch to Restaurant
@@ -2175,131 +2210,82 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
           </div>
         )}
 
-        {/* Daily Conference Section / Button */}
-        <div style={{ marginBottom: '18px' }}>
-          {dailyConferenceRecord?.status === 'approved' ? (
-            <div style={{
-              backgroundColor: 'rgba(16, 185, 129, 0.12)',
-              border: '1.5px solid rgba(16, 185, 129, 0.4)',
-              borderRadius: '12px',
-              padding: '14px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px'
-            }}>
-              <CheckCircle2 size={24} color="#10B981" style={{ flexShrink: 0 }} />
-              <div>
-                <div style={{ fontWeight: 800, color: '#34D399', fontSize: '0.92rem' }}>
-                  Fechamento do Dia Aprovado pelo Restaurante!
-                </div>
-                <div style={{ fontSize: '0.76rem', color: '#CBD5E1', marginTop: '2px' }}>
-                  Todas as suas corridas, taxas e valores deste dia foram conferidos e validados pelo restaurante.
-                </div>
-              </div>
-            </div>
-          ) : dailyConferenceRecord?.status === 'pending' ? (
-            <div style={{
-              backgroundColor: 'rgba(245, 158, 11, 0.12)',
-              border: '1.5px solid rgba(245, 158, 11, 0.4)',
-              borderRadius: '12px',
-              padding: '14px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: '10px'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <Clock size={24} color="#FBBF24" style={{ flexShrink: 0 }} />
-                <div>
-                  <div style={{ fontWeight: 800, color: '#FBBF24', fontSize: '0.92rem' }}>
-                    Conferência do Dia Enviada ao Restaurante!
-                  </div>
-                  <div style={{ fontSize: '0.76rem', color: '#CBD5E1', marginTop: '2px' }}>
-                    Seu fechamento com todas as corridas deste dia foi enviado junto para conferência do gestor.
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  disabled={isCancellingConference}
-                  onClick={handleCancelDailyConference}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: '8px',
-                    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                    border: '1px solid rgba(239, 68, 68, 0.35)',
-                    color: '#FB7185',
-                    fontSize: '0.78rem',
-                    fontWeight: 700,
-                    cursor: isCancellingConference ? 'not-allowed' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '5px',
-                    transition: 'all 0.15s ease'
-                  }}
-                  title="Cancelar o envio desta conferência para editar novamente"
-                >
-                  <XCircle size={14} />
-                  <span>{isCancellingConference ? 'Cancelando...' : 'Cancelar Conferência'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConferenceNote(dailyConferenceRecord.notes || '');
-                    setShowSendConferenceModal(true);
-                  }}
-                  style={{
-                    padding: '8px 14px',
-                    borderRadius: '8px',
-                    backgroundColor: 'rgba(245, 158, 11, 0.2)',
-                    border: '1px solid rgba(245, 158, 11, 0.4)',
-                    color: '#FBBF24',
-                    fontSize: '0.78rem',
-                    fontWeight: 700,
-                    cursor: 'pointer'
-                  }}
-                >
-                  Reenviar / Atualizar
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                setConferenceNote('');
-                setShowSendConferenceModal(true);
-              }}
-              style={{
-                width: '100%',
-                padding: '15px 18px',
-                background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
-                border: 'none',
+        {/* Daily Conference Status (shown only if there is an approved or pending conference) */}
+        {(dailyConferenceRecord?.status === 'approved' || dailyConferenceRecord?.status === 'pending') && (
+          <div style={{ marginBottom: '18px' }}>
+            {dailyConferenceRecord?.status === 'approved' ? (
+              <div style={{
+                backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                border: '1.5px solid rgba(16, 185, 129, 0.4)',
                 borderRadius: '12px',
-                color: '#FFFFFF',
-                fontSize: '0.95rem',
-                fontWeight: 800,
-                cursor: 'pointer',
+                padding: '14px 16px',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                gap: '10px',
-                boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)'
-              }}
-            >
-              <Send size={18} />
-              <span>
-                {draftAdjustments.length > 0
-                  ? `Enviar Conferência do Dia (${draftAdjustments.length} alterações salvas)`
-                  : 'Enviar Conferência do Dia para o Restaurante'}
-              </span>
-            </button>
-          )}
-        </div>
+                gap: '12px'
+              }}>
+                <CheckCircle2 size={24} color="#10B981" style={{ flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontWeight: 800, color: '#34D399', fontSize: '0.92rem' }}>
+                    Fechamento do Dia Aprovado pelo Restaurante!
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: '#CBD5E1', marginTop: '2px' }}>
+                    Todas as suas corridas, taxas e valores deste dia foram conferidos e validados pelo restaurante.
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div style={{
+                backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                border: '1.5px solid rgba(245, 158, 11, 0.4)',
+                borderRadius: '12px',
+                padding: '14px 16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '10px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Clock size={24} color="#FBBF24" style={{ flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontWeight: 800, color: '#FBBF24', fontSize: '0.92rem' }}>
+                      Conferência do Dia Enviada ao Restaurante!
+                    </div>
+                    <div style={{ fontSize: '0.76rem', color: '#CBD5E1', marginTop: '2px' }}>
+                      Seu fechamento com todas as corridas deste dia foi enviado junto para conferência do gestor.
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    disabled={isCancellingConference}
+                    onClick={handleCancelDailyConference}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: '8px',
+                      backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                      border: '1px solid rgba(239, 68, 68, 0.35)',
+                      color: '#FB7185',
+                      fontSize: '0.78rem',
+                      fontWeight: 700,
+                      cursor: isCancellingConference ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      transition: 'all 0.15s ease'
+                    }}
+                    title="Cancelar o envio desta conferência para editar novamente"
+                  >
+                    <XCircle size={14} />
+                    <span>{isCancellingConference ? 'Cancelando...' : 'Cancelar Conferência'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Action Button: Add Missing Delivery */}
         <div style={{ marginBottom: '18px' }}>
@@ -3666,6 +3652,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 </button>
                 <button
                   type="submit"
+                  disabled={isSubmittingEdit}
                   style={{
                     padding: '12px 20px',
                     backgroundColor: '#10B981',
@@ -3674,15 +3661,15 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     color: '#FFFFFF',
                     fontSize: '0.85rem',
                     fontWeight: 700,
-                    cursor: 'pointer',
+                    cursor: isSubmittingEdit ? 'not-allowed' : 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
                     boxShadow: '0 4px 14px rgba(16, 185, 129, 0.3)'
                   }}
                 >
-                  <Check size={16} />
-                  <span>Salvar Alteração</span>
+                  <Send size={15} />
+                  <span>{isSubmittingEdit ? 'Enviando...' : 'Enviar Solicitação de Ajuste'}</span>
                 </button>
               </div>
               <div style={{
@@ -3691,7 +3678,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 fontSize: '0.74rem',
                 color: '#94A3B8'
               }}>
-                💾 Esta alteração fica salva aqui. Você pode editar quantas corridas quiser e enviar todas juntas ao clicar em <strong>Enviar Conferência</strong>.
+                A solicitação de ajuste é enviada diretamente ao restaurante para aprovação.
               </div>
             </form>
           </div>
