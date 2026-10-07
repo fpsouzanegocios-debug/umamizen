@@ -2483,7 +2483,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         )}
 
         {/* Deliveries List */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {paginatedDeliveries.map((delivery, pageIdx) => {
             const itemIndex = (safeDeliveriesCurrentPage - 1) * DELIVERIES_PER_PAGE + pageIdx;
             // Check if there is a draft adjustment for this delivery
@@ -2506,8 +2506,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 key={delivery.id}
                 style={{
                   backgroundColor: '#1E293B',
-                  borderRadius: '12px',
-                  padding: '14px 16px',
+                  borderRadius: '10px',
+                  padding: '9px 12px',
                   border: draftAdj
                     ? '1.5px solid rgba(56, 189, 248, 0.6)'
                     : pendingAdj 
@@ -2515,147 +2515,137 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     : approvedAdj 
                     ? '1px solid rgba(16, 185, 129, 0.4)' 
                     : '1px solid rgba(255, 255, 255, 0.06)',
-                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
+                  boxShadow: '0 2px 6px rgba(0, 0, 0, 0.2)'
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                {/* Linha 1: Pedido #, Horário, Cliente (à esquerda) | Taxa (à direita) */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                    <span style={{ fontWeight: 800, fontSize: '0.94rem', color: '#F8FAFC', flexShrink: 0 }}>
+                      #{delivery.order_number || delivery.external_order_id || `${itemIndex + 1}`}
+                    </span>
+                    <span style={{ fontSize: '0.72rem', color: '#94A3B8', flexShrink: 0 }}>
+                      {dateRange.startDate.toDateString() === dateRange.endDate.toDateString()
+                        ? (formatDateTime(delivery.delivery_date).split(' ')[1] || formatDateTime(delivery.delivery_date))
+                        : formatDateTime(delivery.delivery_date)}
+                    </span>
+                    <span style={{ color: '#475569', fontSize: '0.7rem' }}>•</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, overflow: 'hidden' }}>
+                      <User size={13} style={{ flexShrink: 0, color: '#38BDF8' }} />
                       <span style={{
-                        fontWeight: 800,
-                        fontSize: '0.98rem',
-                        color: '#F8FAFC'
-                      }}>
-                        #{delivery.order_number || delivery.external_order_id || `${itemIndex + 1}`}
-                      </span>
-                      <span style={{ fontSize: '0.75rem', color: '#94A3B8' }}>
-                        {dateRange.startDate.toDateString() === dateRange.endDate.toDateString()
-                          ? (formatDateTime(delivery.delivery_date).split(' ')[1] || formatDateTime(delivery.delivery_date))
-                          : formatDateTime(delivery.delivery_date)}
-                      </span>
-                    </div>
-
-                    {/* Customer Name */}
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      marginTop: '4px',
-                      color: '#38BDF8',
-                      fontSize: '0.88rem',
-                      fontWeight: 600
-                    }}>
-                      <User size={14} style={{ flexShrink: 0, color: '#38BDF8' }} />
-                      <span style={{
+                        color: '#38BDF8',
+                        fontSize: '0.82rem',
+                        fontWeight: 600,
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        maxWidth: '260px'
+                        textOverflow: 'ellipsis'
                       }}>
                         {getCustomerName(delivery)}
                       </span>
                     </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', color: '#CBD5E1', fontSize: '0.85rem' }}>
-                      <MapPin size={14} color="#F43F5E" />
-                      <span>{draftAdj?.proposed_neighborhood || delivery.neighborhood_name || 'Bairro Centro'}</span>
-                      {draftAdj?.proposed_neighborhood && draftAdj.proposed_neighborhood !== delivery.neighborhood_name && (
-                        <span style={{ fontSize: '0.7rem', color: '#38BDF8', fontWeight: 700, backgroundColor: 'rgba(56, 189, 248, 0.15)', padding: '1px 6px', borderRadius: '4px' }}>
-                          alterado
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Payment Info */}
-                    {(() => {
-                      const pInfo = getDeliveryPaymentInfo(delivery);
-                      const isCashNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
-                        ? draftAdj.received_cash > 0 
-                        : pInfo.isCash;
-                      const cashValNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
-                        ? Number(draftAdj.received_cash) 
-                        : pInfo.amount;
-
-                      return (
-                        <div style={{ marginTop: '6px' }}>
-                          {isCashNow ? (
-                            <span style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '5px',
-                              backgroundColor: 'rgba(245, 158, 11, 0.15)',
-                              border: '1px solid rgba(245, 158, 11, 0.4)',
-                              borderRadius: '6px',
-                              padding: '3px 8px',
-                              fontSize: '0.78rem',
-                              color: '#FBBF24',
-                              fontWeight: 700
-                            }}>
-                              <Banknote size={14} />
-                              <span>Dinheiro Retido: {formatCurrency(cashValNow)}</span>
-                            </span>
-                          ) : (
-                            <span style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '5px',
-                              backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                              borderRadius: '6px',
-                              padding: '2px 8px',
-                              fontSize: '0.74rem',
-                              color: '#94A3B8'
-                            }}>
-                              <CreditCard size={12} />
-                              <span>{pInfo.methodName || 'Cartão / App'}</span>
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })()}
                   </div>
 
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '1.15rem', fontWeight: 800, color: draftAdj ? '#38BDF8' : '#34D399' }}>
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <span style={{ fontSize: '1.05rem', fontWeight: 800, color: draftAdj ? '#38BDF8' : '#34D399' }}>
                       {formatCurrency(draftAdj ? draftAdj.proposed_fee : delivery.courier_fee)}
-                    </div>
-                    <div style={{ fontSize: '0.7rem', color: draftAdj ? '#38BDF8' : '#64748B' }}>
-                      {draftAdj ? 'taxa ajustada (salva)' : 'taxa da corrida'}
-                    </div>
+                    </span>
                     {draftAdj && draftAdj.proposed_fee !== Number(delivery.courier_fee || 0) && (
-                      <div style={{ fontSize: '0.68rem', color: '#64748B', textDecoration: 'line-through' }}>
-                        de {formatCurrency(delivery.courier_fee)}
-                      </div>
+                      <span style={{ fontSize: '0.68rem', color: '#64748B', textDecoration: 'line-through', marginLeft: '4px' }}>
+                        {formatCurrency(delivery.courier_fee)}
+                      </span>
                     )}
                   </div>
+                </div>
+
+                {/* Linha 2: Bairro (à esquerda) | Forma de Pagamento / Dinheiro (à direita) */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginTop: '4px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, flex: 1, overflow: 'hidden', color: '#CBD5E1', fontSize: '0.8rem' }}>
+                    <MapPin size={13} color="#F43F5E" style={{ flexShrink: 0 }} />
+                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {draftAdj?.proposed_neighborhood || delivery.neighborhood_name || 'Bairro Centro'}
+                    </span>
+                    {draftAdj?.proposed_neighborhood && draftAdj.proposed_neighborhood !== delivery.neighborhood_name && (
+                      <span style={{ fontSize: '0.68rem', color: '#38BDF8', fontWeight: 700, backgroundColor: 'rgba(56, 189, 248, 0.15)', padding: '0 4px', borderRadius: '4px', flexShrink: 0 }}>
+                        alterado
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Payment Pill */}
+                  {(() => {
+                    const pInfo = getDeliveryPaymentInfo(delivery);
+                    const isCashNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
+                      ? draftAdj.received_cash > 0 
+                      : pInfo.isCash;
+                    const cashValNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
+                      ? Number(draftAdj.received_cash) 
+                      : pInfo.amount;
+
+                    return (
+                      <div style={{ flexShrink: 0 }}>
+                        {isCashNow ? (
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                            border: '1px solid rgba(245, 158, 11, 0.35)',
+                            borderRadius: '5px',
+                            padding: '1px 6px',
+                            fontSize: '0.72rem',
+                            color: '#FBBF24',
+                            fontWeight: 700
+                          }}>
+                            <Banknote size={12} />
+                            <span>Dinheiro: {formatCurrency(cashValNow)}</span>
+                          </span>
+                        ) : (
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                            borderRadius: '5px',
+                            padding: '1px 6px',
+                            fontSize: '0.7rem',
+                            color: '#94A3B8'
+                          }}>
+                            <CreditCard size={11} />
+                            <span>{pInfo.methodName || 'Cartão'}</span>
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Draft Adjustment Status Pill */}
                 {draftAdj && (
                   <div style={{
                     backgroundColor: 'rgba(56, 189, 248, 0.12)',
-                    border: '1px solid rgba(56, 189, 248, 0.4)',
-                    borderRadius: '8px',
-                    padding: '8px 12px',
-                    marginTop: '8px',
-                    fontSize: '0.78rem',
+                    border: '1px solid rgba(56, 189, 248, 0.35)',
+                    borderRadius: '6px',
+                    padding: '4px 8px',
+                    marginTop: '6px',
+                    fontSize: '0.74rem',
                     color: '#38BDF8',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    gap: '8px'
+                    gap: '6px'
                   }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <FileText size={14} style={{ flexShrink: 0 }} />
-                      <span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, overflow: 'hidden' }}>
+                      <FileText size={12} style={{ flexShrink: 0 }} />
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {draftAdj.type === 'remove_delivery' ? (
-                          <strong style={{ color: '#FB7185' }}>Marcado para remoção (Rascunho — não enviada ainda)</strong>
+                          <strong style={{ color: '#FB7185' }}>Rascunho de remoção</strong>
                         ) : (
                           <>
-                            <strong>Alteração salva (Rascunho):</strong> Taxa <strong>{formatCurrency(draftAdj.proposed_fee)}</strong>
+                            <strong>Salvo:</strong> Taxa {formatCurrency(draftAdj.proposed_fee)}
                             {draftAdj.proposed_neighborhood && draftAdj.proposed_neighborhood !== delivery.neighborhood_name && (
-                              <span> • Bairro: <strong>{draftAdj.proposed_neighborhood}</strong></span>
+                              <span> • {draftAdj.proposed_neighborhood}</span>
                             )}
-                            {draftAdj.received_cash ? <span> • Dinheiro: <strong>{formatCurrency(draftAdj.received_cash)}</strong></span> : ''}
+                            {draftAdj.received_cash ? <span> • R$ {Number(draftAdj.received_cash).toFixed(2)} din.</span> : ''}
                           </>
                         )}
                       </span>
@@ -2664,13 +2654,13 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                       type="button"
                       onClick={() => {
                         saveDrafts(draftAdjustments.filter((a) => a.delivery_id !== delivery.id));
-                        showToast('Rascunho desta corrida descartado.');
+                        showToast('Rascunho descartado.');
                       }}
                       style={{
                         background: 'none',
                         border: 'none',
                         color: '#94A3B8',
-                        fontSize: '0.72rem',
+                        fontSize: '0.7rem',
                         cursor: 'pointer',
                         textDecoration: 'underline',
                         flexShrink: 0
@@ -2686,51 +2676,43 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   <div style={{
                     backgroundColor: 'rgba(245, 158, 11, 0.12)',
                     border: '1px solid rgba(245, 158, 11, 0.3)',
-                    borderRadius: '8px',
-                    padding: '8px 10px',
-                    marginTop: '8px',
-                    fontSize: '0.78rem',
+                    borderRadius: '6px',
+                    padding: '4px 8px',
+                    marginTop: '6px',
+                    fontSize: '0.73rem',
                     color: '#FBBF24',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    gap: '8px',
-                    flexWrap: 'wrap'
+                    gap: '6px'
                   }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flex: 1 }}>
-                      <Clock size={14} style={{ flexShrink: 0 }} />
-                      <span>
-                        {pendingAdj.type === 'remove_delivery' ? (
-                          <>Remoção solicitada (Aguardando OK do restaurante)</>
-                        ) : (
-                          <>Ajuste solicitado para <strong>{formatCurrency(pendingAdj.proposed_fee)}</strong> (Aguardando OK do restaurante)</>
-                        )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                      <Clock size={12} style={{ flexShrink: 0 }} />
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        Aguardando OK: {pendingAdj.type === 'remove_delivery' ? 'Remoção' : formatCurrency(pendingAdj.proposed_fee)}
                       </span>
                     </div>
-
                     <button
                       type="button"
                       onClick={() => handleCancelAdjustment(pendingAdj.id)}
                       disabled={isCancellingAdjustment === pendingAdj.id}
                       style={{
                         backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                        border: '1px solid rgba(239, 68, 68, 0.35)',
-                        borderRadius: '6px',
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        borderRadius: '4px',
                         color: '#F87171',
-                        padding: '4px 10px',
-                        fontSize: '0.74rem',
+                        padding: '2px 6px',
+                        fontSize: '0.7rem',
                         fontWeight: 600,
                         cursor: isCancellingAdjustment === pendingAdj.id ? 'not-allowed' : 'pointer',
                         display: 'inline-flex',
                         alignItems: 'center',
-                        gap: '4px',
-                        flexShrink: 0,
-                        transition: 'all 0.15s'
+                        gap: '2px',
+                        flexShrink: 0
                       }}
-                      title="Cancelar solicitação de ajuste desta corrida"
                     >
-                      <X size={13} />
-                      <span>{isCancellingAdjustment === pendingAdj.id ? 'Cancelando...' : 'Cancelar Ajuste'}</span>
+                      <X size={11} />
+                      <span>Cancelar</span>
                     </button>
                   </div>
                 )}
@@ -2739,17 +2721,17 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   <div style={{
                     backgroundColor: 'rgba(16, 185, 129, 0.12)',
                     border: '1px solid rgba(16, 185, 129, 0.3)',
-                    borderRadius: '8px',
-                    padding: '6px 10px',
-                    marginTop: '8px',
-                    fontSize: '0.75rem',
+                    borderRadius: '6px',
+                    padding: '3px 8px',
+                    marginTop: '6px',
+                    fontSize: '0.72rem',
                     color: '#34D399',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '6px'
+                    gap: '4px'
                   }}>
-                    <CheckCircle2 size={13} />
-                    <span>Ajuste de taxa aprovado pelo restaurante!</span>
+                    <CheckCircle2 size={12} />
+                    <span>Ajuste aprovado pelo restaurante!</span>
                   </div>
                 )}
 
@@ -2757,30 +2739,29 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   <div style={{
                     backgroundColor: 'rgba(239, 68, 68, 0.1)',
                     border: '1px solid rgba(239, 68, 68, 0.25)',
-                    borderRadius: '8px',
-                    padding: '6px 10px',
-                    marginTop: '8px',
-                    fontSize: '0.75rem',
+                    borderRadius: '6px',
+                    padding: '3px 8px',
+                    marginTop: '6px',
+                    fontSize: '0.72rem',
                     color: '#FB7185',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '6px'
+                    gap: '4px'
                   }}>
-                    <AlertCircle size={13} />
-                    <span>Ajuste recusado pelo restaurante: {rejectedAdj.notes || 'Mantida taxa padrão'}</span>
+                    <AlertCircle size={12} />
+                    <span>Recusado: {rejectedAdj.notes || 'Mantida taxa padrão'}</span>
                   </div>
                 )}
 
-                {/* Action Buttons for this Delivery */}
+                {/* Linha 3: Ações Compactas em Linha Única */}
                 <div style={{
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'flex-end',
-                  gap: '8px',
-                  marginTop: '10px',
-                  paddingTop: '8px',
-                  borderTop: '1px solid rgba(255, 255, 255, 0.05)',
-                  flexWrap: 'wrap'
+                  justifyContent: 'space-between',
+                  gap: '6px',
+                  marginTop: '6px',
+                  paddingTop: '6px',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.05)'
                 }}>
                   <button
                     onClick={() => {
@@ -2791,59 +2772,61 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                       background: 'none',
                       border: 'none',
                       color: '#64748B',
-                      fontSize: '0.75rem',
+                      fontSize: '0.72rem',
                       cursor: 'pointer',
-                      display: 'flex',
+                      display: 'inline-flex',
                       alignItems: 'center',
-                      gap: '4px',
-                      padding: '4px 8px'
+                      gap: '3px',
+                      padding: '2px 4px'
                     }}
                     title="Informar que essa corrida não foi sua"
                   >
-                    <Trash2 size={13} />
+                    <Trash2 size={12} />
                     <span>Não fiz essa</span>
                   </button>
 
-                  <button
-                    onClick={() => handleOpenEdit(delivery, true)}
-                    style={{
-                      backgroundColor: 'rgba(245, 158, 11, 0.12)',
-                      border: '1px solid rgba(245, 158, 11, 0.3)',
-                      borderRadius: '8px',
-                      color: '#FBBF24',
-                      fontSize: '0.76rem',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      padding: '6px 10px'
-                    }}
-                    title="Informar ou alterar pagamento em dinheiro"
-                  >
-                    <Banknote size={13} />
-                    <span>{getDeliveryPaymentInfo(delivery).isCash ? 'Editar Dinheiro' : 'Recebeu Dinheiro?'}</span>
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <button
+                      onClick={() => handleOpenEdit(delivery, true)}
+                      style={{
+                        backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                        border: '1px solid rgba(245, 158, 11, 0.3)',
+                        borderRadius: '6px',
+                        color: '#FBBF24',
+                        fontSize: '0.73rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '4px 8px'
+                      }}
+                      title="Informar ou alterar pagamento em dinheiro"
+                    >
+                      <Banknote size={12} />
+                      <span>{getDeliveryPaymentInfo(delivery).isCash ? 'Ver Dinheiro' : 'Recebeu Dinheiro?'}</span>
+                    </button>
 
-                  <button
-                    onClick={() => handleOpenEdit(delivery, false)}
-                    style={{
-                      backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                      border: '1px solid rgba(255, 255, 255, 0.12)',
-                      borderRadius: '8px',
-                      color: '#F8FAFC',
-                      fontSize: '0.78rem',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      padding: '6px 12px'
-                    }}
-                  >
-                    <Edit3 size={13} />
-                    <span>Ajustar Bairro / Taxa</span>
-                  </button>
+                    <button
+                      onClick={() => handleOpenEdit(delivery, false)}
+                      style={{
+                        backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        borderRadius: '6px',
+                        color: '#F8FAFC',
+                        fontSize: '0.74rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '4px 10px'
+                      }}
+                    >
+                      <Edit3 size={12} />
+                      <span>Ajustar</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             );
