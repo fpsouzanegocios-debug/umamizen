@@ -943,7 +943,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const savedId = localStorage.getItem('sushi_portal_courier_id');
     const savedPin = localStorage.getItem('sushi_portal_courier_pin');
     if (savedId && savedPin && internalCouriers.length > 0) {
-      const found = internalCouriers.find((c) => c.id === savedId && c.is_active);
+      const found = internalCouriers.find((c) => c.id === savedId && c.is_active && c.show_in_portal !== false);
       if (found && (found.pin || '1234') === savedPin) {
         hasCheckedAutoLoginRef.current = true;
         setAuthenticatedCourier(found);
@@ -1641,7 +1641,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   // SCREEN 1: LOGIN / PIN AUTHENTICATION
   // -------------------------------------------------------------
   if (!authenticatedCourier) {
-    const activeCouriers = internalCouriers.filter((c) => c.is_active);
+    const activeCouriers = internalCouriers.filter(
+      (c) => c.is_active && c.show_in_portal !== false
+    );
 
     return (
       <div style={{

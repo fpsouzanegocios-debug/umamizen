@@ -451,13 +451,16 @@ export const ImportModal: React.FC<ImportModalProps> = ({
       if (batchErr) throw batchErr;
       const batchId = batchData.id;
 
-      // 2. Ensure Couriers exist in `couriers` table
+      // 2. Ensure Couriers exist in `couriers` table (preserving any existing active/portal settings)
       if (previewData.courierNames.length > 0) {
         for (const name of previewData.courierNames) {
           if (name.trim()) {
             await supabase
               .from('couriers')
-              .upsert({ name: name.trim(), is_active: true }, { onConflict: 'name' });
+              .upsert(
+                { name: name.trim(), is_active: true, show_in_portal: true },
+                { onConflict: 'name', ignoreDuplicates: true }
+              );
           }
         }
       }

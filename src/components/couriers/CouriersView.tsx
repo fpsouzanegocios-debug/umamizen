@@ -33,7 +33,7 @@ import { DeliveryCreateModal } from './DeliveryCreateModal';
 import { CourierPaymentModal } from './CourierPaymentModal';
 import { ReconciliationDetailModal, ReconciliationModalType, ReconciliationItem } from './ReconciliationDetailModal';
 import { CourierAdjustmentsModal } from './CourierAdjustmentsModal';
-import { Smartphone, Key, Send, Copy, ExternalLink } from 'lucide-react';
+import { Smartphone, Key, Send, Copy, ExternalLink, CheckCircle2, EyeOff } from 'lucide-react';
 
 interface CouriersViewProps {
   couriers: Courier[];
@@ -81,6 +81,31 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   const [deletingDelivery, setDeletingDelivery] = useState<Delivery | null>(null);
   const [isDeletingDelivery, setIsDeletingDelivery] = useState<boolean>(false);
   const [reconciliationModalType, setReconciliationModalType] = useState<ReconciliationModalType | null>(null);
+
+  // Toggle courier visibility in the mobile portal login
+  const [updatingCourierId, setUpdatingCourierId] = useState<string | null>(null);
+
+  const handleToggleCourierPortalAccess = async (c: Courier) => {
+    const isCurrentlyActive = c.is_active !== false && c.show_in_portal !== false;
+    const nextState = !isCurrentlyActive;
+    setUpdatingCourierId(c.id);
+    try {
+      const { error } = await supabase
+        .from('couriers')
+        .update({
+          is_active: nextState,
+          show_in_portal: nextState
+        })
+        .eq('id', c.id);
+
+      if (error) throw error;
+      onRefresh();
+    } catch (err: any) {
+      alert('Erro ao atualizar status do motoboy: ' + err.message);
+    } finally {
+      setUpdatingCourierId(null);
+    }
+  };
 
   // Daily Settlement / Payments state (Section 16)
   const [dailyPayments, setDailyPayments] = useState<CourierDailyPayment[]>([]);
@@ -601,7 +626,8 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         phone: newCourierPhone.trim() || null,
         pix_key: newCourierPix.trim() || null,
         pin: newCourierPin.trim() || '1234',
-        is_active: true
+        is_active: true,
+        show_in_portal: true
       });
 
       if (error) throw error;
@@ -762,7 +788,9 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
           >
             <option value="all">Todos os Motoboys</option>
             {couriers.map((c) => (
-              <option key={c.id} value={c.name}>{c.name}</option>
+              <option key={c.id} value={c.name}>
+                {c.name} {c.is_active === false || c.show_in_portal === false ? '(Oculto no Portal)' : ''}
+              </option>
             ))}
           </select>
 
@@ -2414,15 +2442,61 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
               </p>
             </div>
 
-            {/* Active Couriers List with PINs */}
+            {/* Couriers List with Portal Access Toggle & PINs */}
             <div>
-              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#F8FAFC', marginBottom: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span>Entregadores Ativos e PINs de Acesso:</span>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>PIN padrão: 1234</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                <div>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#F8FAFC' }}>
+                    Entregadores e Acesso ao Login ({couriers.filter(c => c.is_active !== false && c.show_in_portal !== false).length} ativos no celular)
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    Ative ou desative cada nome para definir quem aparece na tela de login do link do motoboy.
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>PIN padrão: 1234</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPortalShareModal(false);
+                      setShowAddModal(true);
+                    }}
+                    className="btn btn-primary btn-sm"
+                    style={{ fontSize: '0.75rem', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                    title="Cadastrar novo entregador"
+                  >
+                    <Plus size={13} />
+                    <span>Novo Motoboy</span>
+                  </button>
+                </div>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '240px', overflowY: 'auto' }}>
-                {couriers.filter(c => c.is_active).map((c) => {
+              <div style={{
+                backgroundColor: 'rgba(56, 189, 248, 0.08)',
+                border: '1px solid rgba(56, 189, 248, 0.2)',
+                borderRadius: '8px',
+                padding: '8px 12px',
+                marginBottom: '10px',
+                fontSize: '0.74rem',
+                color: '#38BDF8',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
+              }}>
+                <span style={{ fontSize: '1rem' }}>💡</span>
+                <span>
+                  <strong>Controle de Nomes:</strong> Clique em <strong>"Ativo no Login"</strong> para desativar nomes indesejados (como grupos ou entregadores inativos). Apenas os nomes marcados como <strong>Ativo</strong> aparecerão para seleção no celular.
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '280px', overflowY: 'auto' }}>
+                {[...couriers].sort((a, b) => {
+                  const aActive = a.is_active !== false && a.show_in_portal !== false;
+                  const bActive = b.is_active !== false && b.show_in_portal !== false;
+                  if (aActive !== bActive) return aActive ? -1 : 1;
+                  return a.name.localeCompare(b.name);
+                }).map((c) => {
+                  const isPortalActive = c.is_active !== false && c.show_in_portal !== false;
                   const portalLink = `${typeof window !== 'undefined' ? window.location.origin + window.location.pathname : ''}#motoboy`;
                   const pin = c.pin || '1234';
                   const cleanPhone = (c.phone || '').replace(/\D/g, '');
@@ -2430,30 +2504,75 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                     `Olá ${c.name}! Acesse o portal das suas entregas e taxas pelo link: ${portalLink}\nSeu PIN de acesso é: ${pin}`
                   );
                   const waUrl = cleanPhone ? `https://wa.me/55${cleanPhone}?text=${waMsg}` : `https://wa.me/?text=${waMsg}`;
+                  const isUpdating = updatingCourierId === c.id;
 
                   return (
                     <div
                       key={c.id}
                       style={{
-                        backgroundColor: 'var(--bg-input)',
+                        backgroundColor: isPortalActive ? 'var(--bg-input)' : 'rgba(255, 255, 255, 0.02)',
                         borderRadius: '10px',
                         padding: '10px 14px',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        border: '1px solid rgba(255, 255, 255, 0.05)'
+                        border: isPortalActive ? '1px solid rgba(16, 185, 129, 0.25)' : '1px solid rgba(255, 255, 255, 0.05)',
+                        opacity: isPortalActive ? 1 : 0.6,
+                        transition: 'all 0.2s ease',
+                        gap: '10px',
+                        flexWrap: 'wrap'
                       }}
                     >
-                      <div>
-                        <div style={{ fontWeight: 700, color: '#F8FAFC', fontSize: '0.9rem' }}>
-                          {c.name}
+                      <div style={{ minWidth: '150px', flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontWeight: 800, color: isPortalActive ? '#F8FAFC' : '#94A3B8', fontSize: '0.92rem' }}>
+                            {c.name}
+                          </span>
+                          {!isPortalActive && (
+                            <span style={{
+                              fontSize: '0.68rem',
+                              color: '#FB7185',
+                              backgroundColor: 'rgba(244, 63, 94, 0.12)',
+                              border: '1px solid rgba(244, 63, 94, 0.25)',
+                              padding: '1px 6px',
+                              borderRadius: '4px',
+                              fontWeight: 700
+                            }}>
+                              Oculto no Celular
+                            </span>
+                          )}
                         </div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                           {c.phone || 'Sem telefone'} • PIX: {c.pix_key || 'Não cadastrado'}
                         </div>
                       </div>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                        {/* Toggle button to activate / deactivate in login portal */}
+                        <button
+                          type="button"
+                          disabled={isUpdating}
+                          onClick={() => handleToggleCourierPortalAccess(c)}
+                          style={{
+                            padding: '6px 12px',
+                            borderRadius: '8px',
+                            border: isPortalActive ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(148, 163, 184, 0.3)',
+                            backgroundColor: isPortalActive ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                            color: isPortalActive ? '#34D399' : '#94A3B8',
+                            fontSize: '0.76rem',
+                            fontWeight: 700,
+                            cursor: isUpdating ? 'wait' : 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            transition: 'all 0.15s ease'
+                          }}
+                          title={isPortalActive ? 'Clique para desativar e ocultar este nome no login do celular' : 'Clique para ativar e exibir este nome no login do celular'}
+                        >
+                          {isPortalActive ? <CheckCircle2 size={14} color="#10B981" /> : <EyeOff size={14} />}
+                          <span>{isUpdating ? 'Salvando...' : (isPortalActive ? 'Ativo no Login' : 'Oculto no Login')}</span>
+                        </button>
+
                         {/* PIN badge and edit */}
                         <div style={{
                           backgroundColor: 'rgba(255, 255, 255, 0.06)',
@@ -2500,7 +2619,12 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                           target="_blank"
                           rel="noreferrer"
                           className="btn btn-secondary btn-sm"
-                          style={{ padding: '4px 8px', fontSize: '0.75rem', color: '#10B981', borderColor: 'rgba(16, 185, 129, 0.3)' }}
+                          style={{
+                            padding: '4px 8px',
+                            fontSize: '0.75rem',
+                            color: isPortalActive ? '#10B981' : '#64748B',
+                            borderColor: isPortalActive ? 'rgba(16, 185, 129, 0.3)' : 'rgba(255, 255, 255, 0.1)'
+                          }}
                           title="Enviar link e PIN para o WhatsApp do motoboy"
                         >
                           <Send size={12} />

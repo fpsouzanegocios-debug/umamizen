@@ -58,6 +58,7 @@ export interface Courier {
   pix_key?: string;
   pin?: string;
   is_active: boolean;
+  show_in_portal?: boolean;
   notes?: string;
   created_at: string;
 }
