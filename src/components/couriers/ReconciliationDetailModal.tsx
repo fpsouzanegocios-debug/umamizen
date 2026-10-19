@@ -93,12 +93,16 @@ export const ReconciliationDetailModal: React.FC<ReconciliationDetailModalProps>
       // Search term
       if (searchTerm.trim()) {
         const q = searchTerm.toLowerCase();
+        const raw = (item.order as any)?.original_imported_data;
+        const street = (raw?.['Rua'] || raw?.['rua'] || '').toLowerCase();
+        const num = String(raw?.['Número'] || raw?.['Numero'] || '').toLowerCase();
         const numMatch = (item.orderNumber || '').toLowerCase().includes(q);
         const extMatch = (item.externalOrderId || '').toLowerCase().includes(q);
         const custMatch = (item.customerName || '').toLowerCase().includes(q);
         const neighMatch = (item.neighborhood || '').toLowerCase().includes(q);
         const courMatch = (item.courierName || '').toLowerCase().includes(q);
-        if (!numMatch && !extMatch && !custMatch && !neighMatch && !courMatch) {
+        const streetMatch = street.includes(q) || num.includes(q);
+        if (!numMatch && !extMatch && !custMatch && !neighMatch && !courMatch && !streetMatch) {
           return false;
         }
       }
@@ -427,10 +431,30 @@ export const ReconciliationDetailModal: React.FC<ReconciliationDetailModalProps>
                       </td>
 
                       <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.82rem' }}>
-                          <MapPin size={12} color="#94A3B8" />
-                          <span>{item.neighborhood || '-'}</span>
-                        </div>
+                        {(() => {
+                          const raw = (item.order as any)?.original_imported_data;
+                          const street = raw?.['Rua'] || raw?.['rua'] || raw?.['Logradouro'] || raw?.['logradouro'] || '';
+                          let num = '';
+                          if (raw?.['Número'] !== undefined && raw?.['Número'] !== null) num = String(raw['Número']).trim();
+                          else if (raw?.['Numero'] !== undefined && raw?.['Numero'] !== null) num = String(raw['Numero']).trim();
+                          const compl = raw?.['Complemento'] || raw?.['complemento'] || '';
+                          const streetWithNum = street ? (num ? `${street}, ${num}` : street) : '';
+
+                          return (
+                            <div>
+                              {streetWithNum && (
+                                <div style={{ fontWeight: 600, color: '#F8FAFC', fontSize: '0.82rem' }}>
+                                  <span>{streetWithNum}</span>
+                                  {compl && <span style={{ color: '#94A3B8', fontSize: '0.72rem', marginLeft: '4px' }}>({compl})</span>}
+                                </div>
+                              )}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: streetWithNum ? '#94A3B8' : '#F8FAFC' }}>
+                                <MapPin size={11} color="#F43F5E" />
+                                <span>{item.neighborhood || '-'}</span>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       <td style={{ fontWeight: 600, color: '#38BDF8', fontSize: '0.82rem' }}>

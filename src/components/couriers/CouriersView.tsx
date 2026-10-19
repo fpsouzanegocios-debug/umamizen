@@ -1885,10 +1885,30 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                       {d.courier_name}
                     </td>
                     <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <MapPin size={13} color="#94A3B8" />
-                        <span>{d.neighborhood_name || 'Não identificado'}</span>
-                      </div>
+                      {(() => {
+                        const raw = (order as any)?.original_imported_data;
+                        const street = raw?.['Rua'] || raw?.['rua'] || raw?.['Logradouro'] || raw?.['logradouro'] || '';
+                        let num = '';
+                        if (raw?.['Número'] !== undefined && raw?.['Número'] !== null) num = String(raw['Número']).trim();
+                        else if (raw?.['Numero'] !== undefined && raw?.['Numero'] !== null) num = String(raw['Numero']).trim();
+                        const compl = raw?.['Complemento'] || raw?.['complemento'] || '';
+                        const streetWithNum = street ? (num ? `${street}, ${num}` : street) : '';
+
+                        return (
+                          <div>
+                            {streetWithNum && (
+                              <div style={{ fontWeight: 600, color: '#F8FAFC', fontSize: '0.82rem' }}>
+                                <span>{streetWithNum}</span>
+                                {compl && <span style={{ color: '#94A3B8', fontSize: '0.72rem', marginLeft: '4px' }}>({compl})</span>}
+                              </div>
+                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem', color: streetWithNum ? '#94A3B8' : '#F8FAFC' }}>
+                              <MapPin size={11} color="#F43F5E" />
+                              <span>{d.neighborhood_name || 'Não identificado'}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td style={{ fontWeight: 600 }}>
                       {formatCurrency(d.neighborhood_total_rate)}

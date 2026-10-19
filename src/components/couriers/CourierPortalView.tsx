@@ -30,7 +30,8 @@ import {
   History,
   FileText,
   Save,
-  XCircle
+  XCircle,
+  ExternalLink
 } from 'lucide-react';
 import { Courier, Delivery, Order, CourierAdjustment, NeighborhoodRate, DateRange } from '../../types';
 import { supabase } from '../../lib/supabase';
@@ -54,6 +55,17 @@ export interface DraftAdjustment {
   payment_method?: string | null;
   notes?: string;
   saved_at: string;
+  street?: string | null;
+}
+
+export interface DeliveryAddressInfo {
+  street: string;
+  number: string;
+  complement: string;
+  neighborhood: string;
+  streetWithNumber: string;
+  formattedAddress: string;
+  mapsUrl: string;
 }
 
 interface SearchableNeighborhoodSelectProps {
@@ -870,12 +882,16 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [showAddDeliveryModal, setShowAddDeliveryModal] = useState<boolean>(false);
   const [newOrderNumber, setNewOrderNumber] = useState<string>('');
   const [newCustomerName, setNewCustomerName] = useState<string>('');
+  const [newStreet, setNewStreet] = useState<string>('');
   const [newNeighborhood, setNewNeighborhood] = useState<string>('');
   const [newFee, setNewFee] = useState<string>('8.00');
   const [newIsCash, setNewIsCash] = useState<boolean>(false);
   const [newCashAmount, setNewCashAmount] = useState<string>('');
   const [newNote, setNewNote] = useState<string>('');
   const [isSubmittingNew, setIsSubmittingNew] = useState<boolean>(false);
+
+  // Search filter for deliveries in courier portal
+  const [deliverySearchTerm, setDeliverySearchTerm] = useState<string>('');
 
   const [deletingDelivery, setDeletingDelivery] = useState<Delivery | null>(null);
   const [deleteNote, setDeleteNote] = useState<string>('');
@@ -926,6 +942,105 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       }
     }
   }, [authenticatedCourier?.id, selectedDate]);
+
+  const getDeliveryAddressInfo = useCallback((delivery: Delivery | null | undefined): DeliveryAddressInfo => {
+    if (!delivery) {
+      return {
+        street: '',
+        number: '',
+        complement: '',
+        neighborhood: '',
+        streetWithNumber: '',
+        formattedAddress: '',
+        mapsUrl: ''
+      };
+    }
+
+    const order = getDeliveryOrder(delivery);
+    const raw = (order as any)?.original_imported_data;
+
+    // Check draft adjustment first for proposed neighborhood
+    const draftAdj = draftAdjustments.find((a) => a.delivery_id === delivery.id);
+    const neighborhood = (
+      draftAdj?.proposed_neighborhood ||
+      delivery.neighborhood_name ||
+      raw?.['Bairro'] ||
+      raw?.['bairro'] ||
+      order?.neighborhood_name ||
+      ''
+    ).trim();
+
+    // Street
+    let street = (
+      raw?.['Rua'] ||
+      raw?.['rua'] ||
+      raw?.['Logradouro'] ||
+      raw?.['logradouro'] ||
+      raw?.['Endereço'] ||
+      raw?.['Endereco'] ||
+      raw?.['endereco'] ||
+      ''
+    ).trim();
+
+    // Number
+    let number = '';
+    if (raw?.['Número'] !== undefined && raw?.['Número'] !== null && String(raw['Número']).trim() !== '') {
+      number = String(raw['Número']).trim();
+    } else if (raw?.['Numero'] !== undefined && raw?.['Numero'] !== null && String(raw['Numero']).trim() !== '') {
+      number = String(raw['Numero']).trim();
+    } else if (raw?.['numero'] !== undefined && raw?.['numero'] !== null && String(raw['numero']).trim() !== '') {
+      number = String(raw['numero']).trim();
+    }
+
+    // Complement
+    let complement = (
+      raw?.['Complemento'] ||
+      raw?.['complemento'] ||
+      raw?.['Compl'] ||
+      ''
+    ).trim();
+
+    // If street is empty, check delivery.notes or order.notes for address pattern
+    if (!street) {
+      const notesText = delivery.notes || order?.notes || '';
+      const match = notesText.match(/Endereço:\s*([^,•\n]+)(?:,\s*([^•\n]+))?/i);
+      if (match) {
+        street = match[1]?.trim() || '';
+        if (!number && match[2]) number = match[2]?.trim() || '';
+      }
+    }
+
+    // Street with number
+    let streetWithNumber = '';
+    if (street) {
+      streetWithNumber = number ? `${street}, ${number}` : street;
+    }
+
+    // Formatted Address
+    const parts: string[] = [];
+    if (streetWithNumber) {
+      parts.push(complement ? `${streetWithNumber} (${complement})` : streetWithNumber);
+    }
+    if (neighborhood) {
+      parts.push(neighborhood);
+    }
+    const formattedAddress = parts.join(' - ');
+
+    // Google Maps Search Query
+    const city = raw?.['Cidade'] || 'Lavras';
+    const queryParts = [street, number, neighborhood, city].filter(Boolean).join(', ');
+    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(queryParts)}`;
+
+    return {
+      street,
+      number,
+      complement,
+      neighborhood,
+      streetWithNumber,
+      formattedAddress,
+      mapsUrl
+    };
+  }, [getDeliveryOrder, draftAdjustments]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -1197,13 +1312,39 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     });
   }, [adjustments, dateRange]);
 
+  // Filtered deliveries by search term (rua, número, bairro, cliente ou pedido)
+  const filteredCourierDeliveries = useMemo(() => {
+    const term = deliverySearchTerm.trim().toLowerCase();
+    if (!term) return courierDeliveries;
+
+    return courierDeliveries.filter((d) => {
+      const order = getDeliveryOrder(d);
+      const addr = getDeliveryAddressInfo(d);
+      const custName = (order?.customer_name || '').toLowerCase();
+      const ordNum = (d.order_number || d.external_order_id || '').toLowerCase();
+      const neigh = (addr.neighborhood || '').toLowerCase();
+      const street = (addr.street || '').toLowerCase();
+      const num = (addr.number || '').toLowerCase();
+      const compl = (addr.complement || '').toLowerCase();
+
+      return (
+        ordNum.includes(term) ||
+        custName.includes(term) ||
+        neigh.includes(term) ||
+        street.includes(term) ||
+        num.includes(term) ||
+        compl.includes(term)
+      );
+    });
+  }, [courierDeliveries, deliverySearchTerm, getDeliveryOrder, getDeliveryAddressInfo]);
+
   // Deliveries Pagination Calculations
-  const deliveriesTotalPages = Math.max(1, Math.ceil(courierDeliveries.length / DELIVERIES_PER_PAGE));
+  const deliveriesTotalPages = Math.max(1, Math.ceil(filteredCourierDeliveries.length / DELIVERIES_PER_PAGE));
   const safeDeliveriesCurrentPage = Math.min(deliveriesCurrentPage, deliveriesTotalPages);
   const paginatedDeliveries = useMemo(() => {
     const start = (safeDeliveriesCurrentPage - 1) * DELIVERIES_PER_PAGE;
-    return courierDeliveries.slice(start, start + DELIVERIES_PER_PAGE);
-  }, [courierDeliveries, safeDeliveriesCurrentPage]);
+    return filteredCourierDeliveries.slice(start, start + DELIVERIES_PER_PAGE);
+  }, [filteredCourierDeliveries, safeDeliveriesCurrentPage]);
 
   const isDaniel = authenticatedCourier?.name.toLowerCase().includes('daniel') || false;
 
@@ -1373,12 +1514,16 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       delivery_id: null,
       order_number: newOrderNumber.trim() || 'AVULSO',
       customer_name: newCustomerName.trim() || null,
+      street: newStreet.trim() || null,
       received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
       payment_method: newIsCash ? 'Dinheiro' : null,
       neighborhood_name: newNeighborhood.trim() || 'Bairro a confirmar',
       original_fee: 0,
       proposed_fee: fee,
-      notes: newNote.trim() || (newIsCash ? `Corrida avulsa com dinheiro recebido: R$ ${parsedCash || 0}` : 'Corrida faltante adicionada pelo motoboy'),
+      notes: [
+        newStreet.trim() ? `Endereço: ${newStreet.trim()}` : null,
+        newNote.trim() || (newIsCash ? `Corrida avulsa com dinheiro recebido: R$ ${parsedCash || 0}` : 'Corrida faltante adicionada pelo motoboy')
+      ].filter(Boolean).join(' • '),
       saved_at: new Date().toISOString()
     };
 
@@ -1388,6 +1533,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     setShowAddDeliveryModal(false);
     setNewOrderNumber('');
     setNewCustomerName('');
+    setNewStreet('');
     setNewNeighborhood('');
     setNewFee('8.00');
     setNewIsCash(false);
@@ -2391,9 +2537,29 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                         {draft.customer_name}
                       </div>
                     )}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', color: '#CBD5E1', fontSize: '0.85rem' }}>
-                      <MapPin size={14} color="#F43F5E" />
-                      <span>{draft.neighborhood_name}</span>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', marginTop: '6px', color: '#CBD5E1', fontSize: '0.84rem' }}>
+                      <MapPin size={14} color="#F43F5E" style={{ flexShrink: 0, marginTop: '2px' }} />
+                      <div>
+                        {draft.street && (
+                          <div style={{ fontWeight: 700, color: '#F8FAFC' }}>
+                            {draft.street}
+                          </div>
+                        )}
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          backgroundColor: 'rgba(244, 63, 94, 0.12)',
+                          border: '1px solid rgba(244, 63, 94, 0.3)',
+                          borderRadius: '4px',
+                          padding: '1px 6px',
+                          fontSize: '0.72rem',
+                          fontWeight: 700,
+                          color: '#FDA4AF',
+                          marginTop: draft.street ? '3px' : '0'
+                        }}>
+                          Bairro: {draft.neighborhood_name}
+                        </span>
+                      </div>
                     </div>
                     {draft.received_cash ? (
                       <div style={{ marginTop: '6px', color: '#FBBF24', fontSize: '0.78rem', fontWeight: 700 }}>
@@ -2434,9 +2600,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         )}
 
         {/* Deliveries Section Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
           <h2 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0, color: '#F8FAFC' }}>
-            Suas Corridas Registradas ({courierDeliveries.length})
+            Suas Corridas Registradas ({filteredCourierDeliveries.length}{filteredCourierDeliveries.length !== courierDeliveries.length ? ` de ${courierDeliveries.length}` : ''})
             {deliveriesTotalPages > 1 && (
               <span style={{ fontSize: '0.8rem', fontWeight: 500, color: '#94A3B8', marginLeft: '6px' }}>
                 (Pág. {safeDeliveriesCurrentPage}/{deliveriesTotalPages})
@@ -2447,6 +2613,53 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             {dateRange.label || `${formatDateBR(dateRange.startDate)} ~ ${formatDateBR(dateRange.endDate)}`}
           </span>
         </div>
+
+        {/* Search deliveries bar */}
+        {courierDeliveries.length > 0 && (
+          <div style={{ position: 'relative', marginBottom: '12px' }}>
+            <Search size={16} color="#94A3B8" style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+            <input
+              type="text"
+              placeholder="Buscar por rua, bairro, cliente ou nº..."
+              value={deliverySearchTerm}
+              onChange={(e) => {
+                setDeliverySearchTerm(e.target.value);
+                setDeliveriesCurrentPage(1);
+              }}
+              style={{
+                width: '100%',
+                padding: '9px 36px 9px 36px',
+                backgroundColor: '#1E293B',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: '10px',
+                color: '#F8FAFC',
+                fontSize: '0.84rem',
+                outline: 'none',
+                boxSizing: 'border-box'
+              }}
+            />
+            {deliverySearchTerm && (
+              <button
+                type="button"
+                onClick={() => setDeliverySearchTerm('')}
+                style={{
+                  position: 'absolute',
+                  right: '10px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  color: '#94A3B8',
+                  cursor: 'pointer',
+                  padding: '4px'
+                }}
+                title="Limpar busca"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Empty State */}
         {courierDeliveries.length === 0 && (
@@ -2557,67 +2770,134 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   </div>
                 </div>
 
-                {/* Linha 2: Bairro (à esquerda) | Forma de Pagamento / Dinheiro (à direita) */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginTop: '4px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', minWidth: 0, flex: 1, overflow: 'hidden', color: '#CBD5E1', fontSize: '0.8rem' }}>
-                    <MapPin size={13} color="#F43F5E" style={{ flexShrink: 0 }} />
-                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {draftAdj?.proposed_neighborhood || delivery.neighborhood_name || 'Bairro Centro'}
-                    </span>
-                    {draftAdj?.proposed_neighborhood && draftAdj.proposed_neighborhood !== delivery.neighborhood_name && (
-                      <span style={{ fontSize: '0.68rem', color: '#38BDF8', fontWeight: 700, backgroundColor: 'rgba(56, 189, 248, 0.15)', padding: '0 4px', borderRadius: '4px', flexShrink: 0 }}>
-                        alterado
-                      </span>
-                    )}
-                  </div>
+                {/* Linha 2: Endereço completo (Rua, Número, Complemento e Bairro) */}
+                {(() => {
+                  const addr = getDeliveryAddressInfo(delivery);
+                  const pInfo = getDeliveryPaymentInfo(delivery);
+                  const isCashNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
+                    ? draftAdj.received_cash > 0 
+                    : pInfo.isCash;
+                  const cashValNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
+                    ? Number(draftAdj.received_cash) 
+                    : pInfo.amount;
 
-                  {/* Payment Pill */}
-                  {(() => {
-                    const pInfo = getDeliveryPaymentInfo(delivery);
-                    const isCashNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
-                      ? draftAdj.received_cash > 0 
-                      : pInfo.isCash;
-                    const cashValNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
-                      ? Number(draftAdj.received_cash) 
-                      : pInfo.amount;
+                  return (
+                    <div style={{
+                      backgroundColor: 'rgba(15, 23, 42, 0.55)',
+                      border: '1px solid rgba(255, 255, 255, 0.05)',
+                      borderRadius: '8px',
+                      padding: '7px 9px',
+                      marginTop: '6px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
+                        {/* Bloco Endereço */}
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px', minWidth: 0, flex: 1 }}>
+                          <MapPin size={15} color="#F43F5E" style={{ flexShrink: 0, marginTop: '2px' }} />
+                          <div style={{ minWidth: 0, flex: 1, lineHeight: '1.3' }}>
+                            {/* Rua e Número */}
+                            {addr.street ? (
+                              <div style={{ fontSize: '0.86rem', fontWeight: 700, color: '#F8FAFC', wordBreak: 'break-word' }}>
+                                <span>{addr.street}, {addr.number || 'S/N'}</span>
+                                {addr.complement && (
+                                  <span style={{ fontWeight: 500, color: '#94A3B8', fontSize: '0.76rem', marginLeft: '6px' }}>
+                                    ({addr.complement})
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '0.8rem', color: '#94A3B8', fontStyle: 'italic' }}>
+                                Rua e número não informados
+                              </div>
+                            )}
 
-                    return (
-                      <div style={{ flexShrink: 0 }}>
-                        {isCashNow ? (
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            backgroundColor: 'rgba(245, 158, 11, 0.15)',
-                            border: '1px solid rgba(245, 158, 11, 0.35)',
-                            borderRadius: '5px',
-                            padding: '1px 6px',
-                            fontSize: '0.72rem',
-                            color: '#FBBF24',
-                            fontWeight: 700
-                          }}>
-                            <Banknote size={12} />
-                            <span>Dinheiro: {formatCurrency(cashValNow)}</span>
-                          </span>
-                        ) : (
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '3px',
-                            backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                            borderRadius: '5px',
-                            padding: '1px 6px',
-                            fontSize: '0.7rem',
-                            color: '#94A3B8'
-                          }}>
-                            <CreditCard size={11} />
-                            <span>{pInfo.methodName || 'Cartão'}</span>
-                          </span>
-                        )}
+                            {/* Bairro Badge & GPS */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '3px',
+                                backgroundColor: 'rgba(244, 63, 94, 0.12)',
+                                border: '1px solid rgba(244, 63, 94, 0.3)',
+                                borderRadius: '4px',
+                                padding: '1px 7px',
+                                fontSize: '0.73rem',
+                                fontWeight: 700,
+                                color: '#FDA4AF'
+                              }}>
+                                Bairro: {addr.neighborhood || 'Centro'}
+                              </span>
+                              {draftAdj?.proposed_neighborhood && draftAdj.proposed_neighborhood !== delivery.neighborhood_name && (
+                                <span style={{ fontSize: '0.68rem', color: '#38BDF8', fontWeight: 700, backgroundColor: 'rgba(56, 189, 248, 0.15)', padding: '0 4px', borderRadius: '4px' }}>
+                                  alterado
+                                </span>
+                              )}
+                              {addr.street && (
+                                <a
+                                  href={addr.mapsUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    color: '#38BDF8',
+                                    fontSize: '0.7rem',
+                                    fontWeight: 600,
+                                    textDecoration: 'none',
+                                    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+                                    border: '1px solid rgba(56, 189, 248, 0.25)',
+                                    padding: '1px 6px',
+                                    borderRadius: '4px'
+                                  }}
+                                  title="Abrir rota no Google Maps"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <span>GPS Mapa</span>
+                                  <ExternalLink size={10} />
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Forma de Pagamento Pill */}
+                        <div style={{ flexShrink: 0 }}>
+                          {isCashNow ? (
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                              border: '1px solid rgba(245, 158, 11, 0.35)',
+                              borderRadius: '5px',
+                              padding: '2px 7px',
+                              fontSize: '0.73rem',
+                              color: '#FBBF24',
+                              fontWeight: 700
+                            }}>
+                              <Banknote size={12} />
+                              <span>Dinheiro: {formatCurrency(cashValNow)}</span>
+                            </span>
+                          ) : (
+                            <span style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '3px',
+                              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                              borderRadius: '5px',
+                              padding: '2px 7px',
+                              fontSize: '0.7rem',
+                              color: '#94A3B8'
+                            }}>
+                              <CreditCard size={11} />
+                              <span>{pInfo.methodName || 'Cartão'}</span>
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    );
-                  })()}
-                </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Draft Adjustment Status Pill */}
                 {draftAdj && (
@@ -3432,7 +3712,21 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             <div style={{ backgroundColor: '#0F172A', padding: '14px', borderRadius: '12px', marginBottom: '16px', fontSize: '0.85rem' }}>
               <div style={{ color: '#94A3B8' }}>Pedido: <strong style={{ color: '#F8FAFC' }}>#{editingDelivery.order_number || editingDelivery.external_order_id}</strong></div>
               <div style={{ color: '#94A3B8', marginTop: '4px' }}>Cliente: <strong style={{ color: '#38BDF8' }}>{getCustomerName(editingDelivery)}</strong></div>
-              <div style={{ color: '#94A3B8', marginTop: '4px' }}>Bairro Atual: <strong style={{ color: '#F8FAFC' }}>{editingDelivery.neighborhood_name || 'Não informado'}</strong></div>
+              {(() => {
+                const aInfo = getDeliveryAddressInfo(editingDelivery);
+                return (
+                  <>
+                    {aInfo.street && (
+                      <div style={{ color: '#94A3B8', marginTop: '4px' }}>
+                        Endereço: <strong style={{ color: '#F8FAFC' }}>{aInfo.streetWithNumber}{aInfo.complement ? ` (${aInfo.complement})` : ''}</strong>
+                      </div>
+                    )}
+                    <div style={{ color: '#94A3B8', marginTop: '4px' }}>
+                      Bairro Atual: <strong style={{ color: '#F8FAFC' }}>{editingDelivery.neighborhood_name || aInfo.neighborhood || 'Não informado'}</strong>
+                    </div>
+                  </>
+                );
+              })()}
               <div style={{ color: '#94A3B8', marginTop: '4px' }}>Taxa Atual no Sistema: <strong style={{ color: '#34D399' }}>{formatCurrency(editingDelivery.courier_fee)}</strong></div>
             </div>
 
@@ -3768,6 +4062,29 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 />
               </div>
 
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
+                  Rua e Número (Endereço da entrega)
+                </label>
+                <input
+                  type="text"
+                  value={newStreet}
+                  onChange={(e) => setNewStreet(e.target.value)}
+                  placeholder="Ex: Rua Direita, 120 (Apto 2)"
+                  style={{
+                    width: '100%',
+                    padding: '12px 14px',
+                    backgroundColor: '#0F172A',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '10px',
+                    color: '#F8FAFC',
+                    fontSize: '0.95rem',
+                    outline: 'none',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
+
               <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, color: '#CBD5E1', marginBottom: '6px' }}>
                   Bairro da Entrega *
@@ -3969,7 +4286,21 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             <div style={{ backgroundColor: '#0F172A', padding: '12px', borderRadius: '10px', marginBottom: '16px', fontSize: '0.85rem' }}>
               <div style={{ color: '#94A3B8' }}>Pedido: <strong style={{ color: '#F8FAFC' }}>#{deletingDelivery.order_number || deletingDelivery.external_order_id}</strong></div>
               <div style={{ color: '#94A3B8', marginTop: '4px' }}>Cliente: <strong style={{ color: '#38BDF8' }}>{getCustomerName(deletingDelivery)}</strong></div>
-              <div style={{ color: '#94A3B8', marginTop: '4px' }}>Bairro: <strong style={{ color: '#F8FAFC' }}>{deletingDelivery.neighborhood_name || 'Não informado'}</strong></div>
+              {(() => {
+                const aInfo = getDeliveryAddressInfo(deletingDelivery);
+                return (
+                  <>
+                    {aInfo.street && (
+                      <div style={{ color: '#94A3B8', marginTop: '4px' }}>
+                        Endereço: <strong style={{ color: '#F8FAFC' }}>{aInfo.streetWithNumber}{aInfo.complement ? ` (${aInfo.complement})` : ''}</strong>
+                      </div>
+                    )}
+                    <div style={{ color: '#94A3B8', marginTop: '4px' }}>
+                      Bairro: <strong style={{ color: '#F8FAFC' }}>{deletingDelivery.neighborhood_name || aInfo.neighborhood || 'Não informado'}</strong>
+                    </div>
+                  </>
+                );
+              })()}
               <div style={{ color: '#94A3B8', marginTop: '4px' }}>Taxa: <strong style={{ color: '#34D399' }}>{formatCurrency(deletingDelivery.courier_fee)}</strong></div>
             </div>
 
