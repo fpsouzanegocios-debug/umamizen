@@ -21,7 +21,7 @@ import {
   Table,
   LayoutGrid
 } from 'lucide-react';
-import { Courier, Delivery, Order, NeighborhoodRate, SystemSettings, DateRange, CourierDailyPayment } from '../../types';
+import { Courier, Delivery, Order, NeighborhoodRate, SystemSettings, DateRange, CourierDailyPayment, CourierAdjustment } from '../../types';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
 import { isDateInRange, getOperationalDateKey, getLocalDateKey, formatDateBR } from '../../lib/dateUtils';
 import { supabase } from '../../lib/supabase';
@@ -141,15 +141,17 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
     }
   };
 
-  // Fetch pending courier adjustment requests count
-  const fetchPendingAdjustmentsCount = async () => {
+  const [adjustments, setAdjustments] = useState<CourierAdjustment[]>([]);
+
+  // Fetch pending courier adjustment requests and full adjustments
+  const fetchAdjustments = async () => {
     try {
-      const { count, error } = await supabase
+      const { data, error } = await supabase
         .from('courier_adjustments')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'pending');
-      if (!error && count !== null) {
-        setPendingAdjustmentsCount(count);
+        .select('*');
+      if (!error && data) {
+        setAdjustments(data);
+        setPendingAdjustmentsCount(data.filter(a => a.status === 'pending').length);
       }
     } catch (err) {
       console.error('Erro ao consultar ajustes de motoboys:', err);
@@ -288,7 +290,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
   useEffect(() => {
     fetchDailyPayments();
-    fetchPendingAdjustmentsCount();
+    fetchAdjustments();
   }, []);
 
   const handleConfirmDeleteDelivery = async () => {
@@ -424,10 +426,18 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
       let effectiveRetained = 0;
       if (isDaniel) {
+        const confAdj = adjustments.find(
+          a => a.type === 'daily_conference' && 
+          a.date === item.dateStr && 
+          (a.courier_name.toLowerCase().includes('daniel') || a.courier_id === item.courier?.id)
+        );
+
         if (retainedCashOverrides[key] !== undefined) {
           effectiveRetained = retainedCashOverrides[key];
         } else if (item.payment?.retained_cash !== undefined && item.payment?.retained_cash !== null) {
           effectiveRetained = Number(item.payment.retained_cash);
+        } else if (confAdj?.received_cash && Number(confAdj.received_cash) > 0) {
+          effectiveRetained = Number(confAdj.received_cash);
         } else {
           effectiveRetained = ordersCashTotal;
         }
@@ -439,7 +449,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
     });
 
     return Array.from(map.values()).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
-  }, [filteredDeliveries, couriers, dailyPayments, ordersMap, retainedCashOverrides, retainedCashInputs]);
+  }, [filteredDeliveries, couriers, dailyPayments, ordersMap, retainedCashOverrides, retainedCashInputs, adjustments]);
 
   // Totals for the Couriers Module - com dedução dos pagamentos já efetuados e desconto do Daniel
   const courierStats = useMemo(() => {
@@ -2367,7 +2377,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         onClose={() => setShowAdjustmentsModal(false)}
         onSuccess={() => {
           onRefresh();
-          fetchPendingAdjustmentsCount();
+          fetchAdjustments();
           fetchDailyPayments();
         }}
         couriers={couriers}

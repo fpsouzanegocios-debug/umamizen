@@ -436,6 +436,25 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           .eq('id', adj.id);
       }
 
+      // Sync retained cash and conference numbers to courier_daily_payments
+      if (group.totalRetainedCash > 0 || group.conferenceRecord) {
+        try {
+          await supabase
+            .from('courier_daily_payments')
+            .upsert({
+              courier_id: group.courierId || null,
+              courier_name: group.courierName,
+              payment_date: group.date,
+              delivery_count: group.totalDeliveriesCount,
+              total_deliveries: group.totalDeliveriesCount,
+              retained_cash: group.totalRetainedCash,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'courier_name,payment_date' });
+        } catch (paymentErr) {
+          console.warn('Não foi possível sincronizar retained_cash com courier_daily_payments:', paymentErr);
+        }
+      }
+
       await fetchAdjustments();
       onSuccess();
     } catch (err: any) {
@@ -533,6 +552,27 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
             reviewed_by: 'Administrador'
           })
           .eq('id', adj.id);
+      }
+
+      // Sync retained cash and conference numbers to courier_daily_payments for all pending groups
+      for (const group of dailyConferenceGroups) {
+        if (group.hasPending && (group.totalRetainedCash > 0 || group.conferenceRecord)) {
+          try {
+            await supabase
+              .from('courier_daily_payments')
+              .upsert({
+                courier_id: group.courierId || null,
+                courier_name: group.courierName,
+                payment_date: group.date,
+                delivery_count: group.totalDeliveriesCount,
+                total_deliveries: group.totalDeliveriesCount,
+                retained_cash: group.totalRetainedCash,
+                updated_at: new Date().toISOString()
+              }, { onConflict: 'courier_name,payment_date' });
+          } catch (e) {
+            console.warn('Erro ao sincronizar pagamento em lote:', e);
+          }
+        }
       }
 
       await fetchAdjustments();

@@ -36,7 +36,7 @@ import {
 import { Courier, Delivery, Order, CourierAdjustment, NeighborhoodRate, DateRange } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
-import { getOperationalDateKey, formatDateBR, getDefaultDateRange, getTodayDateRange, startOfDay, endOfDay } from '../../lib/dateUtils';
+import { getOperationalDateKey, formatDateBR, getDefaultDateRange, getTodayDateRange, startOfDay, endOfDay, getLocalDateKey } from '../../lib/dateUtils';
 import { normalizeNeighborhoodName } from '../../lib/neighborhoodMatcher';
 import { DateRangePicker } from '../common/DateRangePicker';
 
@@ -56,6 +56,7 @@ export interface DraftAdjustment {
   notes?: string;
   saved_at: string;
   street?: string | null;
+  date?: string;
 }
 
 export interface DeliveryAddressInfo {
@@ -1365,58 +1366,137 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
   // Deliveries total fee calculation, cash retention and daily net settlement
   const stats = useMemo(() => {
-    let totalFee = 0;
-    let totalCashCollected = 0;
-
+    // 1. Map local drafts by delivery_id
     const draftsByDelivery = new Map<string, DraftAdjustment>();
     draftAdjustments.forEach((d) => {
       if (d.delivery_id) draftsByDelivery.set(d.delivery_id, d);
     });
 
-    courierDeliveries.forEach((d) => {
-      const draft = draftsByDelivery.get(d.id);
-      if (draft && draft.type === 'remove_delivery') {
-        // Marcado para remoção pelo motoboy (não soma taxa)
-        return;
+    // 2. Identify removed delivery IDs (from local drafts or database adjustments)
+    const removedDeliveryIds = new Set<string>();
+    draftAdjustments.forEach((d) => {
+      if (d.type === 'remove_delivery' && d.delivery_id) {
+        removedDeliveryIds.add(d.delivery_id);
       }
+    });
+    dayAdjustments.forEach((a) => {
+      if (a.type === 'remove_delivery' && a.delivery_id && a.status !== 'rejected') {
+        removedDeliveryIds.add(a.delivery_id);
+      }
+    });
 
-      // Taxa: usa a taxa do rascunho se houver, ou a taxa original
-      const fee = draft ? draft.proposed_fee : Number(d.courier_fee || 0);
-      totalFee += fee;
+    // 3. Active deliveries in selected period (excluding removed ones)
+    const activeDeliveries = courierDeliveries.filter((d) => !removedDeliveryIds.has(d.id));
 
-      // Dinheiro retido: usa o valor informado no rascunho se especificado, ou da entrega
-      if (draft && draft.received_cash !== undefined && draft.received_cash !== null) {
-        if (draft.received_cash > 0) {
-          totalCashCollected += Number(draft.received_cash);
+    // 4. Calculate fees and cash grouped by day
+    const daysMap = new Map<string, { fees: number; cash: number; count: number }>();
+    const getDayBucket = (dateStr: string) => {
+      let b = daysMap.get(dateStr);
+      if (!b) {
+        b = { fees: 0, cash: 0, count: 0 };
+        daysMap.set(dateStr, b);
+      }
+      return b;
+    };
+
+    activeDeliveries.forEach((d) => {
+      const opKey = getOperationalDateKey(d.delivery_date);
+      const dayKey = opKey || (d.delivery_date ? d.delivery_date.split('T')[0] : '');
+      const bucket = getDayBucket(dayKey);
+      bucket.count += 1;
+
+      // Fee priority: Draft -> DB Adjustment -> Original Delivery Fee
+      const draft = draftsByDelivery.get(d.id);
+      const editAdj = dayAdjustments.find(
+        (a) => a.type === 'edit_fee' && a.delivery_id === d.id && a.status !== 'rejected'
+      );
+      const fee = draft && draft.proposed_fee !== undefined
+        ? Number(draft.proposed_fee)
+        : (editAdj ? Number(editAdj.proposed_fee) : Number(d.courier_fee || 0));
+      bucket.fees += fee;
+
+      // Cash priority: Draft -> DB Adjustment -> getDeliveryPaymentInfo
+      const cashAdj = dayAdjustments.find(
+        (a) => a.delivery_id === d.id && a.status !== 'rejected' && a.received_cash !== null && a.received_cash !== undefined
+      );
+      if (draft && draft.received_cash !== null && draft.received_cash !== undefined) {
+        if (Number(draft.received_cash) > 0) {
+          bucket.cash += Number(draft.received_cash);
         }
+      } else if (cashAdj) {
+        bucket.cash += Number(cashAdj.received_cash);
       } else {
         const pInfo = getDeliveryPaymentInfo(d);
         if (pInfo.isCash) {
-          totalCashCollected += pInfo.amount;
+          bucket.cash += pInfo.amount;
         }
       }
     });
 
-    // Adiciona novas corridas salvas em rascunho
+    // 5. Added deliveries (new_delivery) from local drafts
     draftAdjustments.forEach((draft) => {
       if (draft.type === 'new_delivery') {
-        totalFee += Number(draft.proposed_fee || 0);
+        const dayKey = draft.date || getLocalDateKey(dateRange.startDate);
+        const bucket = getDayBucket(dayKey);
+        bucket.count += 1;
+        bucket.fees += Number(draft.proposed_fee || 0);
         if (draft.received_cash) {
-          totalCashCollected += Number(draft.received_cash);
+          bucket.cash += Number(draft.received_cash);
         }
       }
     });
 
-    // Inclui também novas corridas já salvas no banco
+    // 6. Added deliveries (new_delivery) from database adjustments
     dayAdjustments.forEach((adj) => {
-      if (adj.type === 'new_delivery' && adj.status !== 'rejected' && adj.received_cash) {
-        totalCashCollected += Number(adj.received_cash);
+      if (adj.type === 'new_delivery' && adj.status !== 'rejected') {
+        const dayKey = adj.date || getLocalDateKey(dateRange.startDate);
+        const bucket = getDayBucket(dayKey);
+        bucket.count += 1;
+        bucket.fees += Number(adj.proposed_fee || 0);
+        if (adj.received_cash) {
+          bucket.cash += Number(adj.received_cash);
+        }
       }
     });
 
-    const newDeliveriesDraftCount = draftAdjustments.filter((d) => d.type === 'new_delivery').length;
-    const removeDeliveriesDraftCount = draftAdjustments.filter((d) => d.type === 'remove_delivery').length;
-    const totalCount = Math.max(0, courierDeliveries.length + newDeliveriesDraftCount - removeDeliveriesDraftCount);
+    // 7. For each day, apply conference reported cash and restaurant payment record cash
+    daysMap.forEach((bucket, dayKey) => {
+      // Conference reported cash
+      const confAdj = dayAdjustments.find(
+        (a) => a.type === 'daily_conference' && (a.date === dayKey || (!a.date && dayKey === getLocalDateKey(dateRange.startDate)))
+      );
+      if ((bucket.count > 0 || bucket.fees > 0) && confAdj?.received_cash && Number(confAdj.received_cash) > bucket.cash) {
+        bucket.cash = Number(confAdj.received_cash);
+      }
+
+      // Payment record from restaurant
+      const payRecord = dailyPayments.find((p) => p.payment_date === dayKey);
+      if (payRecord?.retained_cash !== undefined && payRecord?.retained_cash !== null && Number(payRecord.retained_cash) > 0) {
+        bucket.cash = Number(payRecord.retained_cash);
+      }
+    });
+
+    // 8. If dateRange has a daily_conference with cash even if 0 deliveries recorded
+    dayAdjustments.forEach((adj) => {
+      if (adj.type === 'daily_conference' && adj.received_cash && Number(adj.received_cash) > 0) {
+        const dayKey = adj.date;
+        if (dayKey && !daysMap.has(dayKey)) {
+          const bucket = getDayBucket(dayKey);
+          bucket.cash = Number(adj.received_cash);
+        }
+      }
+    });
+
+    let totalCount = 0;
+    let totalFee = 0;
+    let totalCashCollected = 0;
+
+    daysMap.forEach((b) => {
+      totalCount += b.count;
+      totalFee += b.fees;
+      totalCashCollected += b.cash;
+    });
+
     const pendingCount = dayAdjustments.filter((a) => a.status === 'pending').length;
     const netBalance = totalFee - totalCashCollected;
 
@@ -1427,7 +1507,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       totalCashCollected, 
       netBalance 
     };
-  }, [courierDeliveries, dayAdjustments, draftAdjustments, getDeliveryPaymentInfo]);
+  }, [courierDeliveries, dayAdjustments, draftAdjustments, dailyPayments, getDeliveryPaymentInfo, dateRange]);
 
   const dailyConferenceRecord = useMemo(() => {
     return dayAdjustments.find((a) => a.type === 'daily_conference');
@@ -2394,6 +2474,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                     </div>
                     <div style={{ fontSize: '0.76rem', color: '#CBD5E1', marginTop: '2px' }}>
                       Seu fechamento com todas as corridas deste dia foi enviado junto para conferência do gestor.
+                      {dailyConferenceRecord?.received_cash && Number(dailyConferenceRecord.received_cash) > 0 && (
+                        <span style={{ color: '#FBBF24', fontWeight: 600, marginLeft: '6px' }}>
+                          (Dinheiro retido informado: {formatCurrency(Number(dailyConferenceRecord.received_cash))})
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -2774,14 +2859,33 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   </div>
 
                   <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <span style={{ fontSize: '1.05rem', fontWeight: 800, color: draftAdj ? '#38BDF8' : '#34D399' }}>
-                      {formatCurrency(draftAdj ? draftAdj.proposed_fee : delivery.courier_fee)}
-                    </span>
-                    {draftAdj && draftAdj.proposed_fee !== Number(delivery.courier_fee || 0) && (
-                      <span style={{ fontSize: '0.68rem', color: '#64748B', textDecoration: 'line-through', marginLeft: '4px' }}>
-                        {formatCurrency(delivery.courier_fee)}
-                      </span>
-                    )}
+                    {(() => {
+                      const effectiveFee = draftAdj
+                        ? Number(draftAdj.proposed_fee)
+                        : (pendingAdj
+                            ? Number(pendingAdj.proposed_fee)
+                            : (approvedAdj
+                                ? Number(approvedAdj.proposed_fee)
+                                : Number(delivery.courier_fee || 0)));
+                      const hasFeeChange = effectiveFee !== Number(delivery.courier_fee || 0);
+
+                      return (
+                        <>
+                          <span style={{
+                            fontSize: '1.05rem',
+                            fontWeight: 800,
+                            color: draftAdj ? '#38BDF8' : (pendingAdj ? '#FBBF24' : '#34D399')
+                          }}>
+                            {formatCurrency(effectiveFee)}
+                          </span>
+                          {hasFeeChange && (
+                            <span style={{ fontSize: '0.68rem', color: '#64748B', textDecoration: 'line-through', marginLeft: '4px' }}>
+                              {formatCurrency(delivery.courier_fee)}
+                            </span>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -2789,12 +2893,16 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                 {(() => {
                   const addr = getDeliveryAddressInfo(delivery);
                   const pInfo = getDeliveryPaymentInfo(delivery);
-                  const isCashNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
-                    ? draftAdj.received_cash > 0 
-                    : pInfo.isCash;
-                  const cashValNow = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined 
-                    ? Number(draftAdj.received_cash) 
-                    : pInfo.amount;
+                  const cashAdjVal = draftAdj && draftAdj.received_cash !== null && draftAdj.received_cash !== undefined
+                    ? Number(draftAdj.received_cash)
+                    : (pendingAdj && pendingAdj.received_cash !== null && pendingAdj.received_cash !== undefined
+                        ? Number(pendingAdj.received_cash)
+                        : (approvedAdj && approvedAdj.received_cash !== null && approvedAdj.received_cash !== undefined
+                            ? Number(approvedAdj.received_cash)
+                            : null));
+
+                  const isCashNow = cashAdjVal !== null ? cashAdjVal > 0 : pInfo.isCash;
+                  const cashValNow = cashAdjVal !== null ? cashAdjVal : pInfo.amount;
 
                   return (
                     <div style={{
