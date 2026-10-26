@@ -63,14 +63,14 @@ export const getLocalDateKey = (date: Date = new Date()): string => {
  */
 export const getOperationalDateKey = (
   dateInput: string | Date | null | undefined,
-  cutoffHour: number = 6
+  cutoffHour: number = 0
 ): string => {
   if (!dateInput) return '';
 
   if (dateInput instanceof Date) {
     if (isNaN(dateInput.getTime())) return '';
     const d = new Date(dateInput);
-    if (d.getHours() < cutoffHour) {
+    if (cutoffHour > 0 && d.getHours() < cutoffHour) {
       d.setDate(d.getDate() - 1);
     }
     const yyyy = d.getFullYear();
@@ -80,12 +80,27 @@ export const getOperationalDateKey = (
   }
 
   const str = String(dateInput).trim();
+
+  // If the string contains a UTC/timezone indicator (Z, +00, -03, etc.), parse as Date so it converts to local browser time
+  if (str.includes('Z') || /[+-]\d{2}(?::?\d{2})?$/.test(str)) {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) {
+      if (cutoffHour > 0 && d.getHours() < cutoffHour) {
+        d.setDate(d.getDate() - 1);
+      }
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+  }
+
   // Matches "YYYY-MM-DD" followed by optional space/T and "HH:mm"
   const match = str.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T\s]+(\d{1,2}):(\d{1,2}))?/);
   if (!match) {
     const d = new Date(str);
     if (isNaN(d.getTime())) return str.slice(0, 10);
-    if (d.getHours() < cutoffHour) {
+    if (cutoffHour > 0 && d.getHours() < cutoffHour) {
       d.setDate(d.getDate() - 1);
     }
     const yyyy = d.getFullYear();
@@ -99,7 +114,7 @@ export const getOperationalDateKey = (
   const month = Number(m);
   const day = Number(d);
 
-  if (h !== undefined) {
+  if (cutoffHour > 0 && h !== undefined) {
     const hour = Number(h);
     if (hour < cutoffHour) {
       const dateObj = new Date(year, month - 1, day);
@@ -119,7 +134,7 @@ export const getOperationalDateKey = (
  */
 export const getOperationalDate = (
   dateInput: string | Date | null | undefined,
-  cutoffHour: number = 6
+  cutoffHour: number = 0
 ): Date => {
   const key = getOperationalDateKey(dateInput, cutoffHour);
   if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return new Date(NaN);
@@ -128,9 +143,9 @@ export const getOperationalDate = (
 };
 
 /**
- * Returns today's operational date key (considering current hour < 6 is still yesterday's shift)
+ * Returns today's operational date key
  */
-export const getOperationalTodayKey = (cutoffHour: number = 6): string => {
+export const getOperationalTodayKey = (cutoffHour: number = 0): string => {
   return getOperationalDateKey(new Date(), cutoffHour);
 };
 
@@ -155,23 +170,21 @@ export const formatTimeBR = (date: Date): string => {
 
 /**
  * Checks if a given date string or Date is within the specified DateRange.
- * By default, enables operational shift awareness for restaurant night shifts.
+ * Strictly respects the day intended by the user.
  */
 export const isDateInRange = (
   dateInput: string | Date | null | undefined,
   range: DateRange,
-  useOperationalShift: boolean = true
+  useOperationalShift: boolean = false
 ): boolean => {
   if (!dateInput) return false;
 
-  if (useOperationalShift) {
-    const opKey = getOperationalDateKey(dateInput, 6);
-    if (opKey && /^\d{4}-\d{2}-\d{2}$/.test(opKey)) {
-      const [year, month, day] = opKey.split('-').map(Number);
-      const opDate = new Date(year, month - 1, day, 12, 0, 0);
-      const time = opDate.getTime();
-      return time >= startOfDay(range.startDate).getTime() && time <= endOfDay(range.endDate).getTime();
-    }
+  const opKey = getOperationalDateKey(dateInput, useOperationalShift ? 6 : 0);
+  if (opKey && /^\d{4}-\d{2}-\d{2}$/.test(opKey)) {
+    const [year, month, day] = opKey.split('-').map(Number);
+    const opDate = new Date(year, month - 1, day, 12, 0, 0);
+    const time = opDate.getTime();
+    return time >= startOfDay(range.startDate).getTime() && time <= endOfDay(range.endDate).getTime();
   }
 
   let d: Date;

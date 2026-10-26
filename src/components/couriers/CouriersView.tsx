@@ -2310,7 +2310,11 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         neighborhoodRates={neighborhoodRates}
         settings={settings}
         defaultCourierName={selectedCourierName !== 'all' ? selectedCourierName : undefined}
-        defaultDate={dateRange ? getLocalDateKey(dateRange.startDate) : undefined}
+        defaultDate={
+          dateRange && dateRange.startDate.toDateString() === dateRange.endDate.toDateString()
+            ? getLocalDateKey(dateRange.startDate)
+            : getLocalDateKey(new Date())
+        }
       />
 
       {/* Daily Courier Payment / Settlement Modal */}
