@@ -969,7 +969,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
     // Check draft adjustment first for proposed neighborhood
     const draftAdj = draftAdjustments.find((a) => a.delivery_id === delivery.id);
-    const neighborhood = (
+    const neighborhood = String(
       draftAdj?.proposed_neighborhood ||
       delivery.neighborhood_name ||
       raw?.['Bairro'] ||
@@ -979,7 +979,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     ).trim();
 
     // Street
-    let street = (
+    let street = String(
       raw?.['Rua'] ||
       raw?.['rua'] ||
       raw?.['Logradouro'] ||
@@ -1001,7 +1001,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     }
 
     // Complement
-    let complement = (
+    let complement = String(
       raw?.['Complemento'] ||
       raw?.['complemento'] ||
       raw?.['Compl'] ||
@@ -1035,7 +1035,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const formattedAddress = parts.join(' - ');
 
     // Google Maps Search Query
-    const city = raw?.['Cidade'] || 'Lavras';
+    const city = String(raw?.['Cidade'] || 'Lavras').trim();
     const queryParts = [street, number, neighborhood, city].filter(Boolean).join(', ');
     const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(queryParts)}`;
 
