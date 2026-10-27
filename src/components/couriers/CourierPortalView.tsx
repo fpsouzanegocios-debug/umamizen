@@ -886,6 +886,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [editNote, setEditNote] = useState<string>('');
   const [isCashPayment, setIsCashPayment] = useState<boolean>(false);
   const [cashAmount, setCashAmount] = useState<string>('');
+  const [editRemainderMethod, setEditRemainderMethod] = useState<'credito' | 'debito' | 'pix'>('credito');
   const [isSubmittingEdit, setIsSubmittingEdit] = useState<boolean>(false);
 
   const [showAddDeliveryModal, setShowAddDeliveryModal] = useState<boolean>(false);
@@ -1520,18 +1521,27 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const existingDraft = draftAdjustments.find((a) => a.delivery_id === delivery.id);
     const existingPending = dayAdjustments.find((a) => a.delivery_id === delivery.id && a.status === 'pending');
 
+    const checkRemainderMethod = (methodStr?: string | null, noteStr?: string | null): 'credito' | 'debito' | 'pix' => {
+      const combined = `${methodStr || ''} ${noteStr || ''}`.toLowerCase();
+      if (combined.includes('débito') || combined.includes('debito')) return 'debito';
+      if (combined.includes('pix')) return 'pix';
+      return 'credito';
+    };
+
     if (existingDraft) {
       setProposedNeighborhood(existingDraft.proposed_neighborhood || delivery.neighborhood_name || '');
       setProposedFee(String(existingDraft.proposed_fee));
       setEditNote(existingDraft.notes || '');
       setIsCashPayment(existingDraft.received_cash !== null && existingDraft.received_cash !== undefined ? true : (forceCash || false));
       setCashAmount(existingDraft.received_cash ? String(existingDraft.received_cash) : '');
+      setEditRemainderMethod(checkRemainderMethod(existingDraft.payment_method, existingDraft.notes));
     } else if (existingPending) {
       setProposedNeighborhood(existingPending.proposed_neighborhood || delivery.neighborhood_name || '');
       setProposedFee(String(existingPending.proposed_fee));
       setEditNote(existingPending.notes || '');
       setIsCashPayment(existingPending.received_cash !== null && existingPending.received_cash !== undefined ? true : (forceCash || false));
       setCashAmount(existingPending.received_cash ? String(existingPending.received_cash) : '');
+      setEditRemainderMethod(checkRemainderMethod(existingPending.payment_method, existingPending.notes));
     } else {
       setProposedNeighborhood(delivery.neighborhood_name || '');
       setProposedFee(String(delivery.courier_fee || 8.00));
@@ -1543,6 +1553,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
       setIsCashPayment(forceCash ? true : pInfo.isCash);
       setCashAmount(pInfo.isCash && pInfo.amount > 0 ? String(pInfo.amount) : (defAmount > 0 ? String(defAmount) : ''));
+      setEditRemainderMethod(checkRemainderMethod(order?.final_payment_method || delivery.payment_method, order?.notes || delivery.notes));
     }
   };
 
@@ -1562,6 +1573,29 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const parsedCash = isCashPayment ? parseFloat(cashAmount.replace(',', '.')) : null;
     const deliveryDateKey = (editingDelivery.delivery_date ? getOperationalDateKey(editingDelivery.delivery_date) : null) || selectedDate;
 
+    const order = ordersMap.get(editingDelivery.external_order_id) || (editingDelivery.order_number ? ordersMap.get(editingDelivery.order_number) : undefined);
+    const orderGross = Number(order?.gross_amount ?? editingDelivery.order_amount ?? 0);
+
+    let paymentMethodToSave: string | null = null;
+    let autoNote = '';
+
+    if (isCashPayment && parsedCash && !isNaN(parsedCash) && parsedCash > 0) {
+      if (orderGross > parsedCash) {
+        // Split payment: partial cash, remainder card
+        const remainder = Math.round((orderGross - parsedCash) * 100) / 100;
+        const remainderLabel = editRemainderMethod === 'debito' ? 'Cartão de Débito' : (editRemainderMethod === 'pix' ? 'Pix' : 'Cartão de Crédito');
+        paymentMethodToSave = `Dinheiro + ${remainderLabel}`;
+        autoNote = `Recebido: R$ ${parsedCash.toFixed(2)} em dinheiro + R$ ${remainder.toFixed(2)} no ${remainderLabel}`;
+      } else {
+        paymentMethodToSave = 'Dinheiro';
+        autoNote = `Informado pagamento integral em dinheiro: R$ ${parsedCash.toFixed(2)}`;
+      }
+    }
+
+    const finalNotes = editNote.trim()
+      ? (autoNote ? `${autoNote} • ${editNote.trim()}` : editNote.trim())
+      : (autoNote || (finalNeighborhood !== editingDelivery.neighborhood_name ? `Bairro alterado para ${finalNeighborhood}` : 'Ajuste de taxa solicitado pelo motoboy'));
+
     const newDraft: DraftAdjustment = {
       id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       type: 'edit_fee',
@@ -1570,13 +1604,13 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       order_number: editingDelivery.order_number || editingDelivery.external_order_id,
       customer_name: finalCustName,
       received_cash: parsedCash && !isNaN(parsedCash) ? parsedCash : null,
-      payment_method: isCashPayment ? 'Dinheiro' : null,
+      payment_method: paymentMethodToSave,
       neighborhood_name: finalNeighborhood || 'Bairro não especificado',
       original_neighborhood: editingDelivery.neighborhood_name || '',
       proposed_neighborhood: finalNeighborhood,
       original_fee: Number(editingDelivery.courier_fee || 0),
       proposed_fee: proposed,
-      notes: editNote.trim() || (isCashPayment ? `Informado pagamento em dinheiro: R$ ${parsedCash || 0}` : (finalNeighborhood !== editingDelivery.neighborhood_name ? `Bairro alterado para ${finalNeighborhood}` : 'Ajuste de taxa solicitado pelo motoboy')),
+      notes: finalNotes,
       saved_at: new Date().toISOString()
     };
 
@@ -3988,35 +4022,114 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   </div>
                 </label>
 
-                {isCashPayment && (
-                  <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                    <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#FBBF24', marginBottom: '6px' }}>
-                      Valor do pedido recebido em dinheiro (R$) *
-                    </label>
-                    <input
-                      type="text"
-                      value={cashAmount}
-                      onChange={(e) => setCashAmount(e.target.value)}
-                      placeholder="Ex: 85,00"
-                      style={{
-                        width: '100%',
-                        padding: '10px 14px',
-                        backgroundColor: '#0F172A',
-                        border: '1px solid rgba(245, 158, 11, 0.4)',
-                        borderRadius: '8px',
-                        color: '#FBBF24',
-                        fontSize: '1.05rem',
-                        fontWeight: 800,
-                        outline: 'none',
-                        boxSizing: 'border-box'
-                      }}
-                      required={isCashPayment}
-                    />
-                    <span style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '4px', display: 'block' }}>
-                      Esse valor será somado ao seu dinheiro retido e abatido do seu acerto diário.
-                    </span>
-                  </div>
-                )}
+                {isCashPayment && (() => {
+                  const order = ordersMap.get(editingDelivery.external_order_id) || (editingDelivery.order_number ? ordersMap.get(editingDelivery.order_number) : undefined);
+                  const grossVal = Number(editingDelivery.order_amount || order?.gross_amount || 0);
+                  const numCash = parseFloat(cashAmount.replace(',', '.')) || 0;
+                  const isSplit = grossVal > 0 && numCash > 0 && numCash < grossVal;
+                  const remainderVal = isSplit ? Math.round((grossVal - numCash) * 100) / 100 : 0;
+
+                  return (
+                    <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                      <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#FBBF24', marginBottom: '6px' }}>
+                        Valor do pedido recebido em dinheiro (R$) *
+                      </label>
+                      <input
+                        type="text"
+                        value={cashAmount}
+                        onChange={(e) => setCashAmount(e.target.value)}
+                        placeholder="Ex: 50,00"
+                        style={{
+                          width: '100%',
+                          padding: '10px 14px',
+                          backgroundColor: '#0F172A',
+                          border: '1px solid rgba(245, 158, 11, 0.4)',
+                          borderRadius: '8px',
+                          color: '#FBBF24',
+                          fontSize: '1.05rem',
+                          fontWeight: 800,
+                          outline: 'none',
+                          boxSizing: 'border-box'
+                        }}
+                        required={isCashPayment}
+                      />
+                      <span style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '4px', display: 'block' }}>
+                        Esse valor em dinheiro será retido com você e abatido do seu acerto diário.
+                      </span>
+
+                      {/* Split payment card remainder selector */}
+                      {isSplit && (
+                        <div style={{
+                          marginTop: '12px',
+                          padding: '12px',
+                          backgroundColor: 'rgba(56, 189, 248, 0.08)',
+                          border: '1px solid rgba(56, 189, 248, 0.3)',
+                          borderRadius: '10px'
+                        }}>
+                          <div style={{ fontSize: '0.82rem', color: '#38BDF8', fontWeight: 700, marginBottom: '4px' }}>
+                            💳 Pagamento Dividido Detectado
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: '#CBD5E1', marginBottom: '10px' }}>
+                            Recebido: <strong style={{ color: '#FBBF24' }}>{formatCurrency(numCash)}</strong> em dinheiro. Restante de <strong style={{ color: '#38BDF8' }}>{formatCurrency(remainderVal)}</strong> pago no cartão.
+                          </div>
+                          <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#94A3B8', marginBottom: '6px' }}>
+                            Como o cliente pagou o restante de {formatCurrency(remainderVal)}?
+                          </label>
+                          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              onClick={() => setEditRemainderMethod('credito')}
+                              style={{
+                                padding: '6px 12px',
+                                borderRadius: '6px',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                backgroundColor: editRemainderMethod === 'credito' ? '#0284C7' : 'rgba(255, 255, 255, 0.06)',
+                                color: editRemainderMethod === 'credito' ? '#FFFFFF' : '#CBD5E1',
+                                border: editRemainderMethod === 'credito' ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.12)'
+                              }}
+                            >
+                              💳 Cartão de Crédito
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditRemainderMethod('debito')}
+                              style={{
+                                padding: '6px 12px',
+                                borderRadius: '6px',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                backgroundColor: editRemainderMethod === 'debito' ? '#0284C7' : 'rgba(255, 255, 255, 0.06)',
+                                color: editRemainderMethod === 'debito' ? '#FFFFFF' : '#CBD5E1',
+                                border: editRemainderMethod === 'debito' ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.12)'
+                              }}
+                            >
+                              💳 Cartão de Débito
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditRemainderMethod('pix')}
+                              style={{
+                                padding: '6px 12px',
+                                borderRadius: '6px',
+                                fontSize: '0.78rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                backgroundColor: editRemainderMethod === 'pix' ? '#0284C7' : 'rgba(255, 255, 255, 0.06)',
+                                color: editRemainderMethod === 'pix' ? '#FFFFFF' : '#CBD5E1',
+                                border: editRemainderMethod === 'pix' ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.12)'
+                              }}
+                            >
+                              📱 Pix
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div style={{ marginBottom: '20px' }}>

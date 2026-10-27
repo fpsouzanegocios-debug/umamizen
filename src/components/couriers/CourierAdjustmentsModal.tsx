@@ -26,6 +26,7 @@ import { CourierAdjustment, Delivery, Courier, Order } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
 import { formatDateBR, getOperationalDateKey } from '../../lib/dateUtils';
+import { getDeliveryCashAmount } from '../../lib/calculations';
 
 interface CourierAdjustmentsModalProps {
   isOpen: boolean;
@@ -183,9 +184,9 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
         const cashAdj = grp.adjustments.find(a => a.delivery_id === d.id && a.status !== 'rejected' && a.received_cash);
         if (cashAdj) {
           totalRetainedCash += Number(cashAdj.received_cash);
-        } else if (d.payment_method?.toLowerCase() === 'dinheiro' || d.payment_method?.toLowerCase() === 'cash') {
+        } else {
           const order = ordersMap.get(d.external_order_id) || (d.order_number ? ordersMap.get(d.order_number) : undefined);
-          totalRetainedCash += Number(d.order_amount ?? order?.gross_amount ?? 0);
+          totalRetainedCash += getDeliveryCashAmount(d, order);
         }
       });
       addedDeliveries.forEach(a => {
@@ -245,11 +246,46 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           updated_at: new Date().toISOString()
         };
 
-        if (adj.received_cash) {
-          updatePayload.payment_method = 'Dinheiro';
-          updatePayload.order_amount = Number(adj.received_cash);
+        const order = currentDelivery?.external_order_id ? ordersMap.get(currentDelivery.external_order_id) : undefined;
+        const orderGross = Number(order?.gross_amount ?? currentDelivery?.order_amount ?? 0);
+
+        if (adj.received_cash !== null && adj.received_cash !== undefined) {
+          const cashVal = Number(adj.received_cash);
+          updatePayload.order_amount = cashVal;
+
+          if (orderGross > cashVal && cashVal > 0) {
+            // Split payment: part cash, remainder card
+            const remainder = Math.round((orderGross - cashVal) * 100) / 100;
+            const chosenMethod = adj.payment_method || 'Dinheiro + Cartão de Crédito';
+            updatePayload.payment_method = chosenMethod;
+            updatePayload.notes = (currentDelivery?.notes ? currentDelivery.notes + ' | ' : '') + `Pagamento misto: R$ ${cashVal.toFixed(2)} em dinheiro + R$ ${remainder.toFixed(2)} em cartão (${adj.notes || ''})`;
+            
+            if (currentDelivery?.external_order_id) {
+              await supabase
+                .from('orders')
+                .update({ 
+                  final_payment_method: chosenMethod,
+                  notes: (order?.notes ? order.notes + ' | ' : '') + `Ajuste motoboy: R$ ${cashVal.toFixed(2)} em dinheiro + R$ ${remainder.toFixed(2)} no cartão`
+                })
+                .eq('external_order_id', currentDelivery.external_order_id);
+            }
+          } else {
+            updatePayload.payment_method = adj.payment_method || 'Dinheiro';
+            if (currentDelivery?.external_order_id) {
+              await supabase
+                .from('orders')
+                .update({ final_payment_method: adj.payment_method || 'Dinheiro' })
+                .eq('external_order_id', currentDelivery.external_order_id);
+            }
+          }
         } else if (adj.payment_method) {
           updatePayload.payment_method = adj.payment_method;
+          if (currentDelivery?.external_order_id) {
+            await supabase
+              .from('orders')
+              .update({ final_payment_method: adj.payment_method })
+              .eq('external_order_id', currentDelivery.external_order_id);
+          }
         }
 
         const { error: delError } = await supabase
@@ -258,13 +294,6 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           .eq('id', adj.delivery_id);
 
         if (delError) throw delError;
-
-        if ((adj.payment_method === 'Dinheiro' || adj.received_cash) && currentDelivery?.external_order_id) {
-          await supabase
-            .from('orders')
-            .update({ final_payment_method: 'Dinheiro' })
-            .eq('external_order_id', currentDelivery.external_order_id);
-        }
 
       } else if (adj.type === 'new_delivery') {
         const proposedFee = Number(adj.proposed_fee);
@@ -312,6 +341,30 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
         .eq('id', adj.id);
 
       if (adjError) throw adjError;
+
+      // Sync courier_daily_payments for this courier and date
+      try {
+        const groupForAdj = dailyConferenceGroups.find(g => g.courierName === adj.courier_name && g.date === adj.date);
+        if (groupForAdj) {
+          const updatedRetained = adj.received_cash !== null && adj.received_cash !== undefined
+            ? Math.max(groupForAdj.totalRetainedCash, Number(adj.received_cash))
+            : groupForAdj.totalRetainedCash;
+
+          await supabase
+            .from('courier_daily_payments')
+            .upsert({
+              courier_id: adj.courier_id || groupForAdj.courierId || null,
+              courier_name: adj.courier_name,
+              payment_date: adj.date,
+              delivery_count: groupForAdj.totalDeliveriesCount,
+              total_deliveries: groupForAdj.totalDeliveriesCount,
+              retained_cash: updatedRetained,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'courier_name,payment_date' });
+        }
+      } catch (errSync) {
+        console.warn('Sync courier_daily_payments error:', errSync);
+      }
 
       await fetchAdjustments();
       onSuccess();
@@ -379,24 +432,52 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
             updated_at: new Date().toISOString()
           };
 
-          if (adj.received_cash) {
-            updatePayload.payment_method = 'Dinheiro';
-            updatePayload.order_amount = Number(adj.received_cash);
+          const order = currentDelivery?.external_order_id ? ordersMap.get(currentDelivery.external_order_id) : undefined;
+          const orderGross = Number(order?.gross_amount ?? currentDelivery?.order_amount ?? 0);
+
+          if (adj.received_cash !== null && adj.received_cash !== undefined) {
+            const cashVal = Number(adj.received_cash);
+            updatePayload.order_amount = cashVal;
+
+            if (orderGross > cashVal && cashVal > 0) {
+              // Split payment: part cash, remainder card
+              const remainder = Math.round((orderGross - cashVal) * 100) / 100;
+              const chosenMethod = adj.payment_method || 'Dinheiro + Cartão de Crédito';
+              updatePayload.payment_method = chosenMethod;
+              updatePayload.notes = (currentDelivery?.notes ? currentDelivery.notes + ' | ' : '') + `Pagamento misto: R$ ${cashVal.toFixed(2)} em dinheiro + R$ ${remainder.toFixed(2)} em cartão (${adj.notes || ''})`;
+              
+              if (currentDelivery?.external_order_id) {
+                await supabase
+                  .from('orders')
+                  .update({ 
+                    final_payment_method: chosenMethod,
+                    notes: (order?.notes ? order.notes + ' | ' : '') + `Ajuste motoboy: R$ ${cashVal.toFixed(2)} em dinheiro + R$ ${remainder.toFixed(2)} no cartão`
+                  })
+                  .eq('external_order_id', currentDelivery.external_order_id);
+              }
+            } else {
+              updatePayload.payment_method = adj.payment_method || 'Dinheiro';
+              if (currentDelivery?.external_order_id) {
+                await supabase
+                  .from('orders')
+                  .update({ final_payment_method: adj.payment_method || 'Dinheiro' })
+                  .eq('external_order_id', currentDelivery.external_order_id);
+              }
+            }
           } else if (adj.payment_method) {
             updatePayload.payment_method = adj.payment_method;
+            if (currentDelivery?.external_order_id) {
+              await supabase
+                .from('orders')
+                .update({ final_payment_method: adj.payment_method })
+                .eq('external_order_id', currentDelivery.external_order_id);
+            }
           }
 
           await supabase
             .from('deliveries')
             .update(updatePayload)
             .eq('id', adj.delivery_id);
-
-          if ((adj.payment_method === 'Dinheiro' || adj.received_cash) && currentDelivery?.external_order_id) {
-            await supabase
-              .from('orders')
-              .update({ final_payment_method: 'Dinheiro' })
-              .eq('external_order_id', currentDelivery.external_order_id);
-          }
 
         } else if (adj.type === 'new_delivery') {
           const proposedFee = Number(adj.proposed_fee);
@@ -497,24 +578,52 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
             updated_at: new Date().toISOString()
           };
 
-          if (adj.received_cash) {
-            updatePayload.payment_method = 'Dinheiro';
-            updatePayload.order_amount = Number(adj.received_cash);
+          const order = currentDelivery?.external_order_id ? ordersMap.get(currentDelivery.external_order_id) : undefined;
+          const orderGross = Number(order?.gross_amount ?? currentDelivery?.order_amount ?? 0);
+
+          if (adj.received_cash !== null && adj.received_cash !== undefined) {
+            const cashVal = Number(adj.received_cash);
+            updatePayload.order_amount = cashVal;
+
+            if (orderGross > cashVal && cashVal > 0) {
+              // Split payment: part cash, remainder card
+              const remainder = Math.round((orderGross - cashVal) * 100) / 100;
+              const chosenMethod = adj.payment_method || 'Dinheiro + Cartão de Crédito';
+              updatePayload.payment_method = chosenMethod;
+              updatePayload.notes = (currentDelivery?.notes ? currentDelivery.notes + ' | ' : '') + `Pagamento misto: R$ ${cashVal.toFixed(2)} em dinheiro + R$ ${remainder.toFixed(2)} em cartão (${adj.notes || ''})`;
+              
+              if (currentDelivery?.external_order_id) {
+                await supabase
+                  .from('orders')
+                  .update({ 
+                    final_payment_method: chosenMethod,
+                    notes: (order?.notes ? order.notes + ' | ' : '') + `Ajuste motoboy: R$ ${cashVal.toFixed(2)} em dinheiro + R$ ${remainder.toFixed(2)} no cartão`
+                  })
+                  .eq('external_order_id', currentDelivery.external_order_id);
+              }
+            } else {
+              updatePayload.payment_method = adj.payment_method || 'Dinheiro';
+              if (currentDelivery?.external_order_id) {
+                await supabase
+                  .from('orders')
+                  .update({ final_payment_method: adj.payment_method || 'Dinheiro' })
+                  .eq('external_order_id', currentDelivery.external_order_id);
+              }
+            }
           } else if (adj.payment_method) {
             updatePayload.payment_method = adj.payment_method;
+            if (currentDelivery?.external_order_id) {
+              await supabase
+                .from('orders')
+                .update({ final_payment_method: adj.payment_method })
+                .eq('external_order_id', currentDelivery.external_order_id);
+            }
           }
 
           await supabase
             .from('deliveries')
             .update(updatePayload)
             .eq('id', adj.delivery_id);
-
-          if ((adj.payment_method === 'Dinheiro' || adj.received_cash) && currentDelivery?.external_order_id) {
-            await supabase
-              .from('orders')
-              .update({ final_payment_method: 'Dinheiro' })
-              .eq('external_order_id', currentDelivery.external_order_id);
-          }
 
         } else if (adj.type === 'new_delivery') {
           const proposedFee = Number(adj.proposed_fee);
@@ -1030,25 +1139,51 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
                                     )}
                                   </div>
 
-                                  {/* Cash Info */}
-                                  {adj.received_cash && (
-                                    <div style={{
-                                      marginTop: '4px',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '5px',
-                                      backgroundColor: 'rgba(245, 158, 11, 0.15)',
-                                      border: '1px solid rgba(245, 158, 11, 0.35)',
-                                      padding: '2px 8px',
-                                      borderRadius: '6px',
-                                      fontSize: '0.75rem',
-                                      color: '#FBBF24',
-                                      fontWeight: 700
-                                    }}>
-                                      <Banknote size={13} />
-                                      <span>Recebido em Dinheiro: {formatCurrency(adj.received_cash)}</span>
-                                    </div>
-                                  )}
+                                  {/* Cash Info / Split Payment */}
+                                  {adj.received_cash && (() => {
+                                    const linkedDel = deliveries.find(d => d.id === adj.delivery_id);
+                                    const linkedOrd = ordersMap.get(linkedDel?.external_order_id || '') || (adj.order_number ? ordersMap.get(adj.order_number) : undefined);
+                                    const grossVal = Number(linkedOrd?.gross_amount ?? linkedDel?.order_amount ?? 0);
+                                    const cashVal = Number(adj.received_cash);
+                                    const hasRemainder = grossVal > cashVal && cashVal > 0;
+                                    const remainderVal = Math.round((grossVal - cashVal) * 100) / 100;
+
+                                    return (
+                                      <div style={{ marginTop: '4px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                        <div style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '5px',
+                                          backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                                          border: '1px solid rgba(245, 158, 11, 0.35)',
+                                          padding: '2px 8px',
+                                          borderRadius: '6px',
+                                          fontSize: '0.75rem',
+                                          color: '#FBBF24',
+                                          fontWeight: 700
+                                        }}>
+                                          <Banknote size={13} />
+                                          <span>💵 Dinheiro: {formatCurrency(cashVal)}</span>
+                                        </div>
+                                        {hasRemainder && (
+                                          <div style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '5px',
+                                            backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                                            border: '1px solid rgba(56, 189, 248, 0.35)',
+                                            padding: '2px 8px',
+                                            borderRadius: '6px',
+                                            fontSize: '0.75rem',
+                                            color: '#38BDF8',
+                                            fontWeight: 700
+                                          }}>
+                                            <span>💳 Restante no Cartão: {formatCurrency(remainderVal)}</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
 
                                   {/* Neighborhood Info */}
                                   <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '4px' }}>

@@ -3,6 +3,7 @@ import { X, Check, DollarSign, Calendar, Copy, CheckCheck, AlertCircle, RotateCc
 import { supabase } from '../../lib/supabase';
 import { Courier, Delivery, CourierDailyPayment, Order } from '../../types';
 import { formatCurrency } from '../../lib/formatters';
+import { getDeliveryCashAmount } from '../../lib/calculations';
 
 interface CourierPaymentModalProps {
   isOpen: boolean;
@@ -49,10 +50,7 @@ export const CourierPaymentModal: React.FC<CourierPaymentModalProps> = ({
     let sum = 0;
     dayDeliveries.forEach((d) => {
       const order = ordersMap?.get(d.external_order_id);
-      const payMethod = (order?.final_payment_method || order?.original_payment_method || d.payment_method || '').toLowerCase();
-      if (payMethod.includes('dinheiro') || payMethod === 'cash') {
-        sum += Number(order?.gross_amount ?? d.order_amount ?? 0);
-      }
+      sum += getDeliveryCashAmount(d, order);
     });
     return sum;
   }, [dayDeliveries, ordersMap]);

@@ -25,7 +25,7 @@ import { Courier, Delivery, Order, NeighborhoodRate, SystemSettings, DateRange, 
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
 import { isDateInRange, getOperationalDateKey, getLocalDateKey, formatDateBR } from '../../lib/dateUtils';
 import { supabase } from '../../lib/supabase';
-import { calculateDeliveryRates } from '../../lib/calculations';
+import { calculateDeliveryRates, getDeliveryCashAmount, getDeliveryCardAmount } from '../../lib/calculations';
 import { normalizeNeighborhoodName } from '../../lib/neighborhoodMatcher';
 import { syncNeighborhoodRateToOrders } from '../../lib/neighborhoodSync';
 import { DateRangePicker } from '../common/DateRangePicker';
@@ -414,10 +414,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       let ordersCashTotal = 0;
       item.deliveries.forEach((d) => {
         const order = ordersMap.get(d.external_order_id);
-        const payMethod = (order?.final_payment_method || order?.original_payment_method || d.payment_method || '').toLowerCase();
-        if (payMethod.includes('dinheiro') || payMethod === 'cash') {
-          ordersCashTotal += Number(order?.gross_amount ?? d.order_amount ?? 0);
-        }
+        ordersCashTotal += getDeliveryCashAmount(d, order);
       });
 
       const grossTotal = item.baseTotal + item.additionalsTotal;
@@ -566,41 +563,64 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
     filteredDeliveries.forEach((d) => {
       const order = ordersMap.get(d.external_order_id) || (d.order_number ? ordersMap.get(d.order_number) : undefined);
 
-      const rawPayMethod = order?.final_payment_method || order?.original_payment_method || d.payment_method || '';
-      const payMethod = rawPayMethod.toLowerCase();
-      const amount = Number(order?.gross_amount ?? d.order_amount ?? 0);
+      const cashVal = getDeliveryCashAmount(d, order);
+      const cardInfo = getDeliveryCardAmount(d, order);
 
-      const item: ReconciliationItem = {
-        id: d.id,
-        orderNumber: order?.order_number || d.order_number || d.external_order_id,
-        externalOrderId: d.external_order_id,
-        customerName: order?.customer_name || 'Cliente Balcão / Avulso',
-        customerPhone: order?.customer_phone || (order?.original_imported_data?.Telefone) || undefined,
-        neighborhood: d.neighborhood_name || order?.neighborhood_name || 'Bairro a definir',
-        courierName: d.courier_name,
-        deliveryDate: d.delivery_date,
-        amount,
-        paymentMethod: rawPayMethod || 'Não informado',
-        channel: order?.channel || (d.external_order_id?.startsWith('RET') ? 'Retorno' : 'Manual'),
-        notes: order?.notes || d.notes || undefined,
-        changeFor: Number(order?.original_imported_data?.['Troco para']) || undefined,
-        order: order || null,
-        delivery: d
-      };
-
-      // Check physical cash
-      if (payMethod.includes('dinheiro') || payMethod === 'cash') {
+      // 1. Physical Cash portion
+      if (cashVal > 0) {
         cashCount++;
-        cashTotal += amount;
-        cashItems.push(item);
-      } else if (payMethod.includes('débito') || payMethod.includes('debito')) {
-        debitCount++;
-        debitTotal += amount;
-        debitItems.push(item);
-      } else if (payMethod.includes('crédito') || payMethod.includes('credito')) {
-        creditCount++;
-        creditTotal += amount;
-        creditItems.push(item);
+        cashTotal += cashVal;
+        cashItems.push({
+          id: cardInfo.cardAmount > 0 ? `${d.id}_cash` : d.id,
+          orderNumber: order?.order_number || d.order_number || d.external_order_id,
+          externalOrderId: d.external_order_id,
+          customerName: order?.customer_name || 'Cliente Balcão / Avulso',
+          customerPhone: order?.customer_phone || (order?.original_imported_data?.Telefone) || undefined,
+          neighborhood: d.neighborhood_name || order?.neighborhood_name || 'Bairro a definir',
+          courierName: d.courier_name,
+          deliveryDate: d.delivery_date,
+          amount: cashVal,
+          paymentMethod: cardInfo.cardAmount > 0 ? `Dinheiro (Misto: R$ ${cashVal.toFixed(2)})` : 'Dinheiro',
+          channel: order?.channel || (d.external_order_id?.startsWith('RET') ? 'Retorno' : 'Manual'),
+          notes: order?.notes || d.notes || undefined,
+          changeFor: Number(order?.original_imported_data?.['Troco para']) || undefined,
+          order: order || null,
+          delivery: d
+        });
+      }
+
+      // 2. POS Card portion (Credit / Debit)
+      if (cardInfo.cardAmount > 0) {
+        const isDebit = cardInfo.cardType === 'debito';
+        const cardItem: ReconciliationItem = {
+          id: cashVal > 0 ? `${d.id}_card` : d.id,
+          orderNumber: order?.order_number || d.order_number || d.external_order_id,
+          externalOrderId: d.external_order_id,
+          customerName: order?.customer_name || 'Cliente Balcão / Avulso',
+          customerPhone: order?.customer_phone || (order?.original_imported_data?.Telefone) || undefined,
+          neighborhood: d.neighborhood_name || order?.neighborhood_name || 'Bairro a definir',
+          courierName: d.courier_name,
+          deliveryDate: d.delivery_date,
+          amount: cardInfo.cardAmount,
+          paymentMethod: cashVal > 0
+            ? `Cartão ${isDebit ? 'Débito' : 'Crédito'} (Restante: R$ ${cardInfo.cardAmount.toFixed(2)})`
+            : (order?.final_payment_method || order?.original_payment_method || d.payment_method || (isDebit ? 'Débito' : 'Crédito')),
+          channel: order?.channel || (d.external_order_id?.startsWith('RET') ? 'Retorno' : 'Manual'),
+          notes: order?.notes || d.notes || undefined,
+          changeFor: undefined,
+          order: order || null,
+          delivery: d
+        };
+
+        if (isDebit) {
+          debitCount++;
+          debitTotal += cardInfo.cardAmount;
+          debitItems.push(cardItem);
+        } else {
+          creditCount++;
+          creditTotal += cardInfo.cardAmount;
+          creditItems.push(cardItem);
+        }
       }
     });
 

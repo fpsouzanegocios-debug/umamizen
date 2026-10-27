@@ -214,3 +214,68 @@ export function calculateShiftHours(startTime: string, endTime: string, breakMin
   const workedMinutes = Math.max(0, endTotalM - startTotalM - (breakMinutes || 0));
   return roundToCent(workedMinutes / 60);
 }
+
+/**
+ * Computes the exact physical cash amount received in hand by a courier for a given delivery.
+ * Supports full cash, manual edits, and split payments (e.g. part in cash, part in card).
+ */
+export function getDeliveryCashAmount(
+  delivery: { order_amount?: number | null; payment_method?: string | null; is_manually_edited?: boolean },
+  order?: { gross_amount?: number | null; final_payment_method?: string | null; original_payment_method?: string | null; notes?: string | null } | null
+): number {
+  const rawPayMethod = (order?.final_payment_method || order?.original_payment_method || delivery.payment_method || '').toLowerCase();
+  const deliveryAmount = Number(delivery.order_amount);
+  const orderGross = Number(order?.gross_amount ?? 0);
+
+  const hasCashKeyword = rawPayMethod.includes('dinheiro') || rawPayMethod === 'cash';
+
+  // If the delivery has an explicit order_amount (e.g. courier confirmed or edited cash amount)
+  if (!isNaN(deliveryAmount) && deliveryAmount > 0) {
+    if (hasCashKeyword || delivery.is_manually_edited) {
+      // If deliveryAmount is specified, it represents the physical cash in courier's hands!
+      return roundToCent(deliveryAmount);
+    }
+  }
+
+  // If marked as cash and no explicit delivery order_amount override, use order gross amount
+  if (hasCashKeyword) {
+    return roundToCent(orderGross > 0 ? orderGross : (deliveryAmount || 0));
+  }
+
+  return 0;
+}
+
+/**
+ * Computes the card amount (credit/debit) for POS card reconciliation.
+ * Correctly accounts for split payments where part was paid in cash and remainder in card machine.
+ */
+export function getDeliveryCardAmount(
+  delivery: { order_amount?: number | null; payment_method?: string | null; notes?: string | null },
+  order?: { gross_amount?: number | null; final_payment_method?: string | null; original_payment_method?: string | null; notes?: string | null } | null
+): { cardAmount: number; cardType: 'credito' | 'debito' | 'cartao'; isSplit: boolean } {
+  const rawPayMethod = (order?.final_payment_method || order?.original_payment_method || delivery.payment_method || '').toLowerCase();
+  const orderGross = roundToCent(Number(order?.gross_amount ?? delivery.order_amount ?? 0));
+  const cashAmount = getDeliveryCashAmount(delivery, order);
+
+  const allNotes = `${order?.notes || ''} ${delivery?.notes || ''} ${rawPayMethod}`.toLowerCase();
+  let cardType: 'credito' | 'debito' | 'cartao' = 'cartao';
+  if (allNotes.includes('débito') || allNotes.includes('debito')) {
+    cardType = 'debito';
+  } else if (allNotes.includes('crédito') || allNotes.includes('credito') || allNotes.includes('cartao') || allNotes.includes('cartão')) {
+    cardType = 'credito';
+  }
+
+  // 1. Split payment: partial cash, remainder in card
+  if (cashAmount > 0 && orderGross > cashAmount) {
+    const cardAmount = roundToCent(orderGross - cashAmount);
+    return { cardAmount, cardType, isSplit: true };
+  }
+
+  // 2. 100% card payment
+  if (cashAmount === 0 && (rawPayMethod.includes('crédito') || rawPayMethod.includes('credito') || rawPayMethod.includes('débito') || rawPayMethod.includes('debito') || rawPayMethod.includes('cartão') || rawPayMethod.includes('cartao'))) {
+    return { cardAmount: orderGross, cardType, isSplit: false };
+  }
+
+  return { cardAmount: 0, cardType, isSplit: false };
+}
+
