@@ -595,7 +595,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
   // Synchronize selectedDate with active dateRange and reset pagination
   useEffect(() => {
-    const k = getOperationalDateKey(dateRange.startDate) || dateRange.startDate.toISOString().split('T')[0];
+    const k = getLocalDateKey(dateRange.startDate);
     setSelectedDate(k);
     setDeliveriesCurrentPage(1);
     setDaysCurrentPage(1);
@@ -1560,10 +1560,12 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const finalNeighborhood = (proposedNeighborhood || editingDelivery.neighborhood_name || '').trim();
     const finalCustName = getCustomerName(editingDelivery);
     const parsedCash = isCashPayment ? parseFloat(cashAmount.replace(',', '.')) : null;
+    const deliveryDateKey = (editingDelivery.delivery_date ? getOperationalDateKey(editingDelivery.delivery_date) : null) || selectedDate;
 
     const newDraft: DraftAdjustment = {
       id: `draft_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       type: 'edit_fee',
+      date: deliveryDateKey,
       delivery_id: editingDelivery.id,
       order_number: editingDelivery.order_number || editingDelivery.external_order_id,
       customer_name: finalCustName,
@@ -1606,6 +1608,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const newDraft: DraftAdjustment = {
       id: `draft_new_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       type: 'new_delivery',
+      date: selectedDate,
       delivery_id: null,
       order_number: newOrderNumber.trim() || 'AVULSO',
       customer_name: newCustomerName.trim() || null,
@@ -1641,9 +1644,12 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     e.preventDefault();
     if (!deletingDelivery || !authenticatedCourier) return;
 
+    const deliveryDateKey = (deletingDelivery.delivery_date ? getOperationalDateKey(deletingDelivery.delivery_date) : null) || selectedDate;
+
     const newDraft: DraftAdjustment = {
       id: `draft_del_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       type: 'remove_delivery',
+      date: deliveryDateKey,
       delivery_id: deletingDelivery.id,
       order_number: deletingDelivery.order_number || deletingDelivery.external_order_id,
       neighborhood_name: deletingDelivery.neighborhood_name || '',
@@ -1675,24 +1681,36 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     try {
       // 1. If there are draft adjustments, insert them in batch to Supabase courier_adjustments!
       if (draftAdjustments.length > 0) {
-        const recordsToInsert = draftAdjustments.map((draft) => ({
-          courier_id: authenticatedCourier.id,
-          courier_name: authenticatedCourier.name,
-          date: selectedDate,
-          type: draft.type,
-          delivery_id: draft.delivery_id || null,
-          order_number: draft.order_number || null,
-          customer_name: draft.customer_name || null,
-          received_cash: draft.received_cash || null,
-          payment_method: draft.payment_method || null,
-          neighborhood_name: draft.neighborhood_name || 'Bairro não especificado',
-          original_neighborhood: draft.original_neighborhood || '',
-          proposed_neighborhood: draft.proposed_neighborhood || '',
-          original_fee: draft.original_fee,
-          proposed_fee: draft.proposed_fee,
-          notes: draft.notes || '',
-          status: 'pending'
-        }));
+        const recordsToInsert = draftAdjustments.map((draft) => {
+          let itemDate = draft.date;
+          if (!itemDate && draft.delivery_id) {
+            const del = internalDeliveries.find((d) => d.id === draft.delivery_id);
+            if (del?.delivery_date) {
+              itemDate = getOperationalDateKey(del.delivery_date);
+            }
+          }
+          if (!itemDate) {
+            itemDate = selectedDate;
+          }
+          return {
+            courier_id: authenticatedCourier.id,
+            courier_name: authenticatedCourier.name,
+            date: itemDate,
+            type: draft.type,
+            delivery_id: draft.delivery_id || null,
+            order_number: draft.order_number || null,
+            customer_name: draft.customer_name || null,
+            received_cash: draft.received_cash || null,
+            payment_method: draft.payment_method || null,
+            neighborhood_name: draft.neighborhood_name || 'Bairro não especificado',
+            original_neighborhood: draft.original_neighborhood || '',
+            proposed_neighborhood: draft.proposed_neighborhood || '',
+            original_fee: draft.original_fee,
+            proposed_fee: draft.proposed_fee,
+            notes: draft.notes || '',
+            status: 'pending'
+          };
+        });
 
         const { error: adjsError } = await supabase
           .from('courier_adjustments')
@@ -1701,8 +1719,18 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         if (adjsError) throw adjsError;
       }
 
+      // Determine the target date of this shift conference
+      const shiftDeliveries = courierDeliveries.filter((d) => {
+        const isRemoved = draftAdjustments.some((draft) => draft.type === 'remove_delivery' && draft.delivery_id === d.id);
+        return !isRemoved;
+      });
+      const dominantDeliveryDate = shiftDeliveries.length > 0 && shiftDeliveries[0].delivery_date
+        ? getOperationalDateKey(shiftDeliveries[0].delivery_date)
+        : null;
+      const targetConferenceDate = dominantDeliveryDate || selectedDate;
+
       // 2. Insert or update the daily conference record
-      const existing = dayAdjustments.find((a) => a.type === 'daily_conference');
+      const existing = dayAdjustments.find((a) => a.type === 'daily_conference' && a.date === targetConferenceDate);
       const adjustmentsSummary = draftAdjustments.length > 0
         ? ` (${draftAdjustments.length} ajustes incluídos neste envio)`
         : '';
@@ -1714,6 +1742,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         const { error } = await supabase
           .from('courier_adjustments')
           .update({
+            date: targetConferenceDate,
             original_fee: stats.totalFee,
             proposed_fee: stats.totalFee,
             received_cash: stats.totalCashCollected,
@@ -1727,7 +1756,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         const { error } = await supabase.from('courier_adjustments').insert({
           courier_id: authenticatedCourier.id,
           courier_name: authenticatedCourier.name,
-          date: selectedDate,
+          date: targetConferenceDate,
           type: 'daily_conference',
           original_fee: stats.totalFee,
           proposed_fee: stats.totalFee,

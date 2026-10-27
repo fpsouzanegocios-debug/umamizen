@@ -25,7 +25,7 @@ import {
 import { CourierAdjustment, Delivery, Courier, Order } from '../../types';
 import { supabase } from '../../lib/supabase';
 import { formatCurrency, formatDateTime } from '../../lib/formatters';
-import { formatDateBR } from '../../lib/dateUtils';
+import { formatDateBR, getOperationalDateKey } from '../../lib/dateUtils';
 
 interface CourierAdjustmentsModalProps {
   isOpen: boolean;
@@ -139,9 +139,13 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
     const groups = Array.from(map.values()).map((grp) => {
       // Find all registered deliveries for this courier and date
       const dayDeliveries = deliveries.filter(d => {
-        const matchCourier = d.courier_name === grp.courierName || d.courier_id === grp.courierId;
-        const dDate = d.delivery_date ? (d.delivery_date.startsWith(grp.date) || d.delivery_date.split('T')[0] === grp.date) : false;
-        return matchCourier && dDate;
+        const matchCourier = 
+          (d.courier_id && d.courier_id === grp.courierId) ||
+          (d.courier_name && d.courier_name.trim().toLowerCase() === grp.courierName.trim().toLowerCase());
+        if (!matchCourier) return false;
+        if (!d.delivery_date) return false;
+        const opKey = getOperationalDateKey(d.delivery_date);
+        return opKey === grp.date || d.delivery_date.split('T')[0] === grp.date;
       });
 
       const pendingAdjustments = grp.adjustments.filter(a => a.status === 'pending');
