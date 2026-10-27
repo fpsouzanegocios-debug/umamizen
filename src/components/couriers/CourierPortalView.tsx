@@ -1729,8 +1729,19 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         : null;
       const targetConferenceDate = dominantDeliveryDate || selectedDate;
 
-      // 2. Insert or update the daily conference record
-      const existing = dayAdjustments.find((a) => a.type === 'daily_conference' && a.date === targetConferenceDate);
+      // 2. Insert or update the daily conference record in Supabase
+      const { data: existingConfs } = await supabase
+        .from('courier_adjustments')
+        .select('id')
+        .eq('courier_id', authenticatedCourier.id)
+        .eq('date', targetConferenceDate)
+        .eq('type', 'daily_conference')
+        .limit(1);
+
+      const existingRecordId = existingConfs && existingConfs.length > 0
+        ? existingConfs[0].id
+        : dayAdjustments.find((a) => a.type === 'daily_conference' && a.date === targetConferenceDate)?.id;
+
       const adjustmentsSummary = draftAdjustments.length > 0
         ? ` (${draftAdjustments.length} ajustes incluídos neste envio)`
         : '';
@@ -1738,7 +1749,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         ? conferenceNote.trim()
         : `Fechamento do turno: ${stats.totalCount} entregas, R$ ${stats.totalFee.toFixed(2)} em taxas, R$ ${stats.totalCashCollected.toFixed(2)} em dinheiro retido.${adjustmentsSummary}`;
 
-      if (existing) {
+      if (existingRecordId) {
         const { error } = await supabase
           .from('courier_adjustments')
           .update({
@@ -1748,9 +1759,11 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
             received_cash: stats.totalCashCollected,
             notes: summaryText,
             status: 'pending',
+            reviewed_at: null,
+            reviewed_by: null,
             created_at: new Date().toISOString()
           })
-          .eq('id', existing.id);
+          .eq('id', existingRecordId);
         if (error) throw error;
       } else {
         const { error } = await supabase.from('courier_adjustments').insert({
@@ -1763,6 +1776,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
           received_cash: stats.totalCashCollected,
           notes: summaryText,
           status: 'pending',
+          reviewed_at: null,
+          reviewed_by: null,
           created_at: new Date().toISOString()
         });
         if (error) throw error;
