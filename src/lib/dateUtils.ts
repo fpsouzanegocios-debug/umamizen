@@ -81,8 +81,13 @@ export const getOperationalDateKey = (
 
   const str = String(dateInput).trim();
 
-  // If the string contains a UTC/timezone indicator (Z, +00, -03, etc.), parse as Date so it converts to local browser time
-  if (str.includes('Z') || /[+-]\d{2}(?::?\d{2})?$/.test(str)) {
+  // If pure YYYY-MM-DD date string without time, return as-is (strict calendar day, immune to timezone offsets)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    return str;
+  }
+
+  // If the string contains a time component AND a UTC/timezone indicator (Z, +00, -03, etc.), parse as Date so it converts to local browser time
+  if (/[T\s].*(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(str)) {
     const d = new Date(str);
     if (!isNaN(d.getTime())) {
       if (cutoffHour > 0 && d.getHours() < cutoffHour) {
