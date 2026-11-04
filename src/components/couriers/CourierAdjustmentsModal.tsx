@@ -146,7 +146,7 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
         if (!matchCourier) return false;
         if (!d.delivery_date) return false;
         const opKey = getOperationalDateKey(d.delivery_date);
-        return opKey === grp.date || d.delivery_date.split('T')[0] === grp.date;
+        return opKey === grp.date;
       });
 
       const pendingAdjustments = grp.adjustments.filter(a => a.status === 'pending');
