@@ -220,29 +220,45 @@ export function calculateShiftHours(startTime: string, endTime: string, breakMin
  * Supports full cash, manual edits, and split payments (e.g. part in cash, part in card).
  */
 export function getDeliveryCashAmount(
-  delivery: { order_amount?: number | null; payment_method?: string | null; is_manually_edited?: boolean },
-  order?: { gross_amount?: number | null; final_payment_method?: string | null; original_payment_method?: string | null; notes?: string | null } | null
+  delivery: { order_amount?: number | null; payment_method?: string | null; is_manually_edited?: boolean; notes?: string | null },
+  order?: { gross_amount?: number | null; final_payment_method?: string | null; original_payment_method?: string | null; notes?: string | null; original_imported_data?: any } | null
 ): number {
-  const rawPayMethod = (order?.final_payment_method || order?.original_payment_method || delivery.payment_method || '').toLowerCase();
-  const deliveryAmount = Number(delivery.order_amount);
+  const rawPayMethod = (
+    order?.final_payment_method ||
+    delivery.payment_method ||
+    order?.original_payment_method ||
+    order?.original_imported_data?.['Forma de pagamento'] ||
+    ''
+  ).toLowerCase();
+
+  const deliveryNotes = (delivery?.notes || '').toLowerCase();
+  const orderNotes = (order?.notes || '').toLowerCase();
+  const deliveryAmount = Number(delivery?.order_amount);
   const orderGross = Number(order?.gross_amount ?? 0);
 
-  const hasCashKeyword = rawPayMethod.includes('dinheiro') || rawPayMethod === 'cash';
+  const hasCashKeyword =
+    rawPayMethod.includes('dinheiro') ||
+    rawPayMethod === 'cash' ||
+    deliveryNotes.includes('pagamento em dinheiro') ||
+    deliveryNotes.includes('em dinheiro') ||
+    deliveryNotes.includes('dinheiro retido') ||
+    deliveryNotes.includes('pagamento misto') ||
+    orderNotes.includes('pagamento em dinheiro') ||
+    orderNotes.includes('em dinheiro');
 
-  // If the delivery has an explicit order_amount (e.g. courier confirmed or edited cash amount)
+  // If there's no cash keyword in the payment method or notes, it's NOT a cash delivery!
+  // Note: delivery.is_manually_edited must NEVER falsely turn card/online orders into cash.
+  if (!hasCashKeyword) {
+    return 0;
+  }
+
+  // If the delivery has an explicit order_amount (e.g. courier confirmed or edited cash amount, or partial cash in split payment)
   if (!isNaN(deliveryAmount) && deliveryAmount > 0) {
-    if (hasCashKeyword || delivery.is_manually_edited) {
-      // If deliveryAmount is specified, it represents the physical cash in courier's hands!
-      return roundToCent(deliveryAmount);
-    }
+    return roundToCent(deliveryAmount);
   }
 
   // If marked as cash and no explicit delivery order_amount override, use order gross amount
-  if (hasCashKeyword) {
-    return roundToCent(orderGross > 0 ? orderGross : (deliveryAmount || 0));
-  }
-
-  return 0;
+  return roundToCent(orderGross > 0 ? orderGross : (deliveryAmount || 0));
 }
 
 /**
@@ -251,10 +267,16 @@ export function getDeliveryCashAmount(
  */
 export function getDeliveryCardAmount(
   delivery: { order_amount?: number | null; payment_method?: string | null; notes?: string | null },
-  order?: { gross_amount?: number | null; final_payment_method?: string | null; original_payment_method?: string | null; notes?: string | null } | null
+  order?: { gross_amount?: number | null; final_payment_method?: string | null; original_payment_method?: string | null; notes?: string | null; original_imported_data?: any } | null
 ): { cardAmount: number; cardType: 'credito' | 'debito' | 'cartao'; isSplit: boolean } {
-  const rawPayMethod = (order?.final_payment_method || order?.original_payment_method || delivery.payment_method || '').toLowerCase();
-  const orderGross = roundToCent(Number(order?.gross_amount ?? delivery.order_amount ?? 0));
+  const rawPayMethod = (
+    order?.final_payment_method ||
+    delivery?.payment_method ||
+    order?.original_payment_method ||
+    order?.original_imported_data?.['Forma de pagamento'] ||
+    ''
+  ).toLowerCase();
+  const orderGross = roundToCent(Number(order?.gross_amount ?? delivery?.order_amount ?? 0));
   const cashAmount = getDeliveryCashAmount(delivery, order);
 
   const allNotes = `${order?.notes || ''} ${delivery?.notes || ''} ${rawPayMethod}`.toLowerCase();
