@@ -576,7 +576,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
   const [dateRange, setDateRange] = useState<DateRange>(() => getTodayDateRange());
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = new Date();
-    return getOperationalDateKey(today) || today.toISOString().split('T')[0];
+    return getOperationalDateKey(today) || getLocalDateKey(today);
   });
   const [adjustments, setAdjustments] = useState<CourierAdjustment[]>([]);
   const [isLoadingAdjustments, setIsLoadingAdjustments] = useState<boolean>(false);
@@ -1571,7 +1571,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const finalNeighborhood = (proposedNeighborhood || editingDelivery.neighborhood_name || '').trim();
     const finalCustName = getCustomerName(editingDelivery);
     const parsedCash = isCashPayment ? parseFloat(cashAmount.replace(',', '.')) : null;
-    const deliveryDateKey = selectedDate || (editingDelivery.delivery_date ? getOperationalDateKey(editingDelivery.delivery_date) : undefined);
+    const deliveryDateKey = selectedDate;
 
     const order = ordersMap.get(editingDelivery.external_order_id) || (editingDelivery.order_number ? ordersMap.get(editingDelivery.order_number) : undefined);
     const orderGross = Number(order?.gross_amount ?? editingDelivery.order_amount ?? 0);
@@ -1678,7 +1678,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     e.preventDefault();
     if (!deletingDelivery || !authenticatedCourier) return;
 
-    const deliveryDateKey = selectedDate || (deletingDelivery.delivery_date ? getOperationalDateKey(deletingDelivery.delivery_date) : undefined);
+    const deliveryDateKey = selectedDate;
 
     const newDraft: DraftAdjustment = {
       id: `draft_del_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -1716,7 +1716,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       // 1. If there are draft adjustments, insert them in batch to Supabase courier_adjustments!
       if (draftAdjustments.length > 0) {
         const recordsToInsert = draftAdjustments.map((draft) => {
-          const itemDate = draft.date || selectedDate;
+          // Strictly attribute all adjustments to the shift date currently conferred
+          const itemDate = selectedDate;
           return {
             courier_id: authenticatedCourier.id,
             courier_name: authenticatedCourier.name,
