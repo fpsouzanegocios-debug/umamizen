@@ -342,7 +342,7 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
 
       if (adjError) throw adjError;
 
-      // Sync courier_daily_payments for this courier and date
+      // Sync courier_daily_payments for this courier and date (ONLY if a payment record already exists!)
       try {
         const groupForAdj = dailyConferenceGroups.find(g => g.courierName === adj.courier_name && g.date === adj.date);
         if (groupForAdj) {
@@ -350,17 +350,24 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
             ? Math.max(groupForAdj.totalRetainedCash, Number(adj.received_cash))
             : groupForAdj.totalRetainedCash;
 
-          await supabase
+          const { data: exPay } = await supabase
             .from('courier_daily_payments')
-            .upsert({
-              courier_id: adj.courier_id || groupForAdj.courierId || null,
-              courier_name: adj.courier_name,
-              payment_date: adj.date,
-              delivery_count: groupForAdj.totalDeliveriesCount,
-              total_deliveries: groupForAdj.totalDeliveriesCount,
-              retained_cash: updatedRetained,
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'courier_name,payment_date' });
+            .select('id')
+            .eq('courier_name', adj.courier_name)
+            .eq('payment_date', adj.date)
+            .maybeSingle();
+
+          if (exPay) {
+            await supabase
+              .from('courier_daily_payments')
+              .update({
+                delivery_count: groupForAdj.totalDeliveriesCount,
+                total_deliveries: groupForAdj.totalDeliveriesCount,
+                retained_cash: updatedRetained,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', exPay.id);
+          }
         }
       } catch (errSync) {
         console.warn('Sync courier_daily_payments error:', errSync);
@@ -521,20 +528,27 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           .eq('id', adj.id);
       }
 
-      // Sync retained cash and conference numbers to courier_daily_payments
+      // Sync retained cash and conference numbers to courier_daily_payments (ONLY if a payment record already exists!)
       if (group.totalRetainedCash > 0 || group.conferenceRecord) {
         try {
-          await supabase
+          const { data: exPay } = await supabase
             .from('courier_daily_payments')
-            .upsert({
-              courier_id: group.courierId || null,
-              courier_name: group.courierName,
-              payment_date: group.date,
-              delivery_count: group.totalDeliveriesCount,
-              total_deliveries: group.totalDeliveriesCount,
-              retained_cash: group.totalRetainedCash,
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'courier_name,payment_date' });
+            .select('id')
+            .eq('courier_name', group.courierName)
+            .eq('payment_date', group.date)
+            .maybeSingle();
+
+          if (exPay) {
+            await supabase
+              .from('courier_daily_payments')
+              .update({
+                delivery_count: group.totalDeliveriesCount,
+                total_deliveries: group.totalDeliveriesCount,
+                retained_cash: group.totalRetainedCash,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', exPay.id);
+          }
         } catch (paymentErr) {
           console.warn('Não foi possível sincronizar retained_cash com courier_daily_payments:', paymentErr);
         }
@@ -667,21 +681,28 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           .eq('id', adj.id);
       }
 
-      // Sync retained cash and conference numbers to courier_daily_payments for all pending groups
+      // Sync retained cash and conference numbers to courier_daily_payments for all pending groups (ONLY if a payment record already exists!)
       for (const group of dailyConferenceGroups) {
         if (group.hasPending && (group.totalRetainedCash > 0 || group.conferenceRecord)) {
           try {
-            await supabase
+            const { data: exPay } = await supabase
               .from('courier_daily_payments')
-              .upsert({
-                courier_id: group.courierId || null,
-                courier_name: group.courierName,
-                payment_date: group.date,
-                delivery_count: group.totalDeliveriesCount,
-                total_deliveries: group.totalDeliveriesCount,
-                retained_cash: group.totalRetainedCash,
-                updated_at: new Date().toISOString()
-              }, { onConflict: 'courier_name,payment_date' });
+              .select('id')
+              .eq('courier_name', group.courierName)
+              .eq('payment_date', group.date)
+              .maybeSingle();
+
+            if (exPay) {
+              await supabase
+                .from('courier_daily_payments')
+                .update({
+                  delivery_count: group.totalDeliveriesCount,
+                  total_deliveries: group.totalDeliveriesCount,
+                  retained_cash: group.totalRetainedCash,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', exPay.id);
+            }
           } catch (e) {
             console.warn('Erro ao sincronizar pagamento em lote:', e);
           }
