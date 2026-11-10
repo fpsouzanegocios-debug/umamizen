@@ -156,6 +156,20 @@ h1, h2, h3, h4, h5, h6 {
   transform: translateY(-1px);
 }
 
+.btn-success {
+  background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+  color: #FFFFFF;
+  font-weight: 700;
+  box-shadow: 0 2px 10px rgba(16, 185, 129, 0.35);
+  border: 1px solid rgba(16, 185, 129, 0.5);
+}
+
+.btn-success:hover {
+  background: linear-gradient(135deg, #34D399 0%, #10B981 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.45);
+}
+
 .btn-secondary {
   background: #1E293B;
   color: var(--text-primary);
@@ -226,7 +240,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* Inputs & Form Controls */
-.input, .select, .textarea {
+.input, .select, .textarea, .form-control {
   width: 100%;
   background: var(--bg-input);
   border: 1px solid var(--border-color);
@@ -236,16 +250,18 @@ h1, h2, h3, h4, h5, h6 {
   font-family: 'Inter', sans-serif;
   font-size: 0.875rem;
   outline: none;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
   color-scheme: dark;
 }
 
-.input:focus, .select:focus, .textarea:focus {
-  border-color: var(--accent-red);
+.input:focus, .select:focus, .textarea:focus, .form-control:focus {
+  border-color: #38BDF8;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
 }
 
 select.select option,
-.select option {
+.select option,
+select.form-control option {
   background-color: var(--bg-card);
   color: var(--text-primary);
 }

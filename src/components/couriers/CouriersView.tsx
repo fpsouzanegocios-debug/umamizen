@@ -34,7 +34,7 @@ import { CourierPaymentModal } from './CourierPaymentModal';
 import { ReconciliationDetailModal, ReconciliationModalType, ReconciliationItem } from './ReconciliationDetailModal';
 import { CourierAdjustmentsModal } from './CourierAdjustmentsModal';
 import { CourierBatchPaymentModal } from './CourierBatchPaymentModal';
-import { Smartphone, Key, Send, Copy, ExternalLink, CheckCircle2, EyeOff } from 'lucide-react';
+import { Smartphone, Key, Send, Copy, ExternalLink, CheckCircle2, EyeOff, ClipboardCheck, FileCheck, FileText } from 'lucide-react';
 
 interface CouriersViewProps {
   couriers: Courier[];
@@ -72,8 +72,18 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   const [newCourierPix, setNewCourierPix] = useState<string>('');
   const [newCourierPin, setNewCourierPin] = useState<string>('1234');
   const [showAdjustmentsModal, setShowAdjustmentsModal] = useState<boolean>(false);
+  const [adjustmentsModalInitialTab, setAdjustmentsModalInitialTab] = useState<'pending' | 'resolved'>('pending');
+  const [adjustmentsModalInitialCourier, setAdjustmentsModalInitialCourier] = useState<string>('all');
+  const [adjustmentsModalInitialDate, setAdjustmentsModalInitialDate] = useState<string | undefined>(undefined);
   const [showBatchPaymentModal, setShowBatchPaymentModal] = useState<boolean>(false);
   const [pendingAdjustmentsCount, setPendingAdjustmentsCount] = useState<number>(0);
+
+  const handleOpenConference = (courierName: string, dateStr: string, tab: 'pending' | 'resolved' = 'resolved') => {
+    setAdjustmentsModalInitialTab(tab);
+    setAdjustmentsModalInitialCourier(courierName);
+    setAdjustmentsModalInitialDate(dateStr);
+    setShowAdjustmentsModal(true);
+  };
   const [showPortalShareModal, setShowPortalShareModal] = useState<boolean>(false);
   const [editingCourierPin, setEditingCourierPin] = useState<{ id: string; name: string; pin: string } | null>(null);
   const [showAddDeliveryModal, setShowAddDeliveryModal] = useState<boolean>(false);
@@ -144,6 +154,10 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   };
 
   const [adjustments, setAdjustments] = useState<CourierAdjustment[]>([]);
+
+  const approvedConferencesCount = useMemo(() => {
+    return adjustments.filter((a) => a.type === 'daily_conference' && a.status === 'approved').length;
+  }, [adjustments]);
 
   // Fetch pending courier adjustment requests and full adjustments
   const fetchAdjustments = async () => {
@@ -369,6 +383,8 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       isDaniel: boolean;
       payment?: CourierDailyPayment | null;
       isPaid: boolean;
+      conferenceRecord?: CourierAdjustment | null;
+      conferenceStatus?: 'approved' | 'pending' | 'rejected' | null;
     }>();
 
     filteredDeliveries.forEach((d) => {
@@ -394,11 +410,13 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
           grossTotal: 0,
           ordersCashTotal: 0,
           retainedCash: 0,
-          retainedCashInputVal: '0',
+          retainedCashInputVal: '0.00',
           totalToPay: 0,
           isDaniel: d.courier_name.toLowerCase().includes('daniel'),
           payment,
-          isPaid: Boolean(payment && payment.is_paid)
+          isPaid: Boolean(payment && payment.is_paid),
+          conferenceRecord: null,
+          conferenceStatus: null
         });
       }
 
@@ -423,14 +441,18 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       item.grossTotal = grossTotal;
       item.ordersCashTotal = ordersCashTotal;
 
+      const confAdj = adjustments.find(
+        (a) =>
+          a.type === 'daily_conference' &&
+          a.date === item.dateStr &&
+          (a.courier_name.toLowerCase() === item.courierName.toLowerCase() || a.courier_id === item.courier?.id)
+      );
+
+      item.conferenceRecord = confAdj || null;
+      item.conferenceStatus = confAdj ? (confAdj.status as 'approved' | 'pending' | 'rejected') : null;
+
       let effectiveRetained = 0;
       if (isDaniel) {
-        const confAdj = adjustments.find(
-          a => a.type === 'daily_conference' && 
-          a.date === item.dateStr && 
-          (a.courier_name.toLowerCase().includes('daniel') || a.courier_id === item.courier?.id)
-        );
-
         if (retainedCashOverrides[key] !== undefined) {
           effectiveRetained = retainedCashOverrides[key];
         } else if (item.payment?.retained_cash !== undefined && item.payment?.retained_cash !== null) {
@@ -442,9 +464,10 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         }
       }
 
-      item.retainedCash = effectiveRetained;
-      item.retainedCashInputVal = retainedCashInputs[key] ?? (effectiveRetained > 0 ? String(effectiveRetained) : '0');
-      item.totalToPay = isDaniel ? (grossTotal - effectiveRetained) : grossTotal;
+      const roundedRetained = Math.round(effectiveRetained * 100) / 100;
+      item.retainedCash = roundedRetained;
+      item.retainedCashInputVal = retainedCashInputs[key] ?? (roundedRetained > 0 ? roundedRetained.toFixed(2) : '0.00');
+      item.totalToPay = isDaniel ? Math.round((grossTotal - roundedRetained) * 100) / 100 : grossTotal;
     });
 
     return Array.from(map.values()).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
@@ -862,27 +885,50 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             <span>+ Adicionar Entrega (Retorno)</span>
           </button>
 
-          {/* Pending Adjustments Button */}
-          {pendingAdjustmentsCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowAdjustmentsModal(true)}
-              className="btn btn-primary full-width-mobile"
-              style={{
-                backgroundColor: '#F59E0B',
-                borderColor: '#F59E0B',
-                color: '#0B0F19',
-                fontWeight: 700,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-              title="Ajustes de taxas e corridas solicitados pelos motoboys aguardando seu OK"
-            >
-              <UserCheck size={16} />
-              <span>Conferir Ajustes ({pendingAdjustmentsCount})</span>
-            </button>
-          )}
+          {/* Always Visible Conferences & History Button */}
+          <button
+            type="button"
+            onClick={() => {
+              setAdjustmentsModalInitialTab(pendingAdjustmentsCount > 0 ? 'pending' : 'resolved');
+              setAdjustmentsModalInitialCourier('all');
+              setAdjustmentsModalInitialDate(undefined);
+              setShowAdjustmentsModal(true);
+            }}
+            className={pendingAdjustmentsCount > 0 ? "btn btn-gold full-width-mobile" : "btn btn-secondary full-width-mobile"}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontWeight: 700
+            }}
+            title="Ver conferências de fechamento dos motoboys (pendentes e histórico de realizadas)"
+          >
+            <ClipboardCheck size={16} color={pendingAdjustmentsCount > 0 ? '#0B0F19' : '#38BDF8'} />
+            <span>Conferências</span>
+            {pendingAdjustmentsCount > 0 ? (
+              <span style={{
+                backgroundColor: '#0B0F19',
+                color: '#FBBF24',
+                padding: '1px 6px',
+                borderRadius: '10px',
+                fontSize: '0.7rem',
+                fontWeight: 800
+              }}>
+                {pendingAdjustmentsCount} pendente(s)
+              </span>
+            ) : (
+              <span style={{
+                backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                color: '#38BDF8',
+                padding: '1px 6px',
+                borderRadius: '10px',
+                fontSize: '0.7rem',
+                fontWeight: 600
+              }}>
+                Histórico ({approvedConferencesCount})
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
@@ -925,7 +971,12 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
           <button
             type="button"
-            onClick={() => setShowAdjustmentsModal(true)}
+            onClick={() => {
+              setAdjustmentsModalInitialTab('pending');
+              setAdjustmentsModalInitialCourier('all');
+              setAdjustmentsModalInitialDate(undefined);
+              setShowAdjustmentsModal(true);
+            }}
             className="btn btn-primary btn-sm"
             style={{ backgroundColor: '#F59E0B', borderColor: '#F59E0B', color: '#0B0F19', fontWeight: 800, padding: '8px 16px' }}
           >
@@ -1290,7 +1341,30 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             </div>
 
             {/* Quick Multi-select Toolbar */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setAdjustmentsModalInitialTab('resolved');
+                  setAdjustmentsModalInitialCourier('all');
+                  setAdjustmentsModalInitialDate(undefined);
+                  setShowAdjustmentsModal(true);
+                }}
+                className="btn btn-secondary btn-sm"
+                style={{
+                  fontSize: '0.74rem',
+                  padding: '4px 10px',
+                  color: '#38BDF8',
+                  borderColor: 'rgba(56, 189, 248, 0.35)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+                title="Ver histórico de conferências já realizadas pelos motoboys"
+              >
+                <FileCheck size={13} />
+                <span>Ver Conferências ({approvedConferencesCount})</span>
+              </button>
               <button
                 type="button"
                 onClick={toggleSelectAllSettlements}
@@ -1528,6 +1602,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                       <th>Total Diária (Bruto)</th>
                       <th>Dinheiro c/ Motoboy</th>
                       <th>Líquido a Pagar</th>
+                      <th style={{ textAlign: 'center' }}>Conferência</th>
                       <th>Status</th>
                       <th>Forma Pgto</th>
                       <th style={{ textAlign: 'right' }}>Ação</th>
@@ -1665,6 +1740,68 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                             )}
                           </td>
 
+                          {/* Conferência Status / Quick Link */}
+                          <td style={{ textAlign: 'center' }}>
+                            {item.conferenceRecord ? (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenConference(item.courierName, item.dateStr, item.conferenceStatus === 'pending' ? 'pending' : 'resolved')}
+                                style={{
+                                  border: 'none',
+                                  background: 'none',
+                                  padding: 0,
+                                  cursor: 'pointer'
+                                }}
+                                title={
+                                  item.conferenceStatus === 'approved'
+                                    ? 'Conferência realizada e aprovada. Clique para visualizar detalhes completos.'
+                                    : item.conferenceStatus === 'pending'
+                                    ? 'Conferência enviada aguardando aprovação. Clique para conferir.'
+                                    : 'Conferência recusada. Clique para ver detalhes.'
+                                }
+                              >
+                                <span
+                                  className={
+                                    item.conferenceStatus === 'approved'
+                                      ? 'badge badge-success'
+                                      : item.conferenceStatus === 'pending'
+                                      ? 'badge badge-warning'
+                                      : 'badge badge-danger'
+                                  }
+                                  style={{
+                                    fontSize: '0.72rem',
+                                    padding: '3px 8px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  {item.conferenceStatus === 'approved' ? (
+                                    <>
+                                      <CheckCircle2 size={11} color="#34D399" />
+                                      <span>Conferido</span>
+                                    </>
+                                  ) : item.conferenceStatus === 'pending' ? (
+                                    <>
+                                      <Clock size={11} />
+                                      <span>Aguardando OK</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <X size={11} />
+                                      <span>Recusado</span>
+                                    </>
+                                  )}
+                                </span>
+                              </button>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }} title="Sem fechamento enviado pelo motoboy neste dia">
+                                —
+                              </span>
+                            )}
+                          </td>
+
                           <td>
                             <span style={{
                               fontSize: '0.72rem',
@@ -1686,22 +1823,44 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                             {isPaid ? (item.payment?.payment_method || 'Pix') : '-'}
                           </td>
                           <td style={{ textAlign: 'right' }}>
-                            <button
-                              type="button"
-                              onClick={() => setPaymentModalData({
-                                courierName: item.courierName,
-                                courier: item.courier,
-                                dateStr: item.dateStr,
-                                dayDeliveries: item.deliveries,
-                                existingPayment: item.payment,
-                                initialRetainedCash: item.retainedCash
-                              })}
-                              className={isPaid ? "btn btn-secondary btn-sm" : "btn btn-primary btn-sm"}
-                              style={isPaid ? { padding: '3px 8px', fontSize: '0.75rem' } : { backgroundColor: '#10B981', borderColor: '#10B981', padding: '3px 8px', fontSize: '0.75rem' }}
-                            >
-                              {isPaid ? <Edit3 size={12} /> : <DollarSign size={12} />}
-                              <span>{isPaid ? 'Ver / Editar' : 'Marcar Pago'}</span>
-                            </button>
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                              {item.conferenceRecord && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenConference(item.courierName, item.dateStr, item.conferenceStatus === 'pending' ? 'pending' : 'resolved')}
+                                  className="btn btn-secondary btn-sm"
+                                  style={{
+                                    padding: '3px 8px',
+                                    fontSize: '0.72rem',
+                                    color: '#38BDF8',
+                                    borderColor: 'rgba(56, 189, 248, 0.35)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                  }}
+                                  title="Visualizar conferência deste dia realizada pelo motoboy"
+                                >
+                                  <FileText size={12} />
+                                  <span>Conferência</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setPaymentModalData({
+                                  courierName: item.courierName,
+                                  courier: item.courier,
+                                  dateStr: item.dateStr,
+                                  dayDeliveries: item.deliveries,
+                                  existingPayment: item.payment,
+                                  initialRetainedCash: item.retainedCash
+                                })}
+                                className={isPaid ? "btn btn-secondary btn-sm" : "btn btn-success btn-sm"}
+                                style={isPaid ? { padding: '3px 8px', fontSize: '0.75rem' } : { padding: '3px 10px', fontSize: '0.75rem', fontWeight: 800 }}
+                              >
+                                {isPaid ? <Edit3 size={12} /> : <DollarSign size={12} />}
+                                <span>{isPaid ? 'Ver / Editar' : 'Marcar Pago'}</span>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1742,7 +1901,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                       <td style={{ color: '#38BDF8', fontSize: '0.95rem' }}>
                         {formatCurrency(selectedSettlementsSummary ? selectedSettlementsSummary.totalToPay : displayedSettlements.reduce((acc, s) => acc + s.totalToPay, 0))}
                       </td>
-                      <td colSpan={3}></td>
+                      <td colSpan={4}></td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1869,22 +2028,44 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                           )}
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => setPaymentModalData({
-                            courierName: item.courierName,
-                            courier: item.courier,
-                            dateStr: item.dateStr,
-                            dayDeliveries: item.deliveries,
-                            existingPayment: item.payment,
-                            initialRetainedCash: item.retainedCash
-                          })}
-                          className={isPaid ? "btn btn-secondary btn-sm" : "btn btn-primary btn-sm"}
-                          style={isPaid ? {} : { backgroundColor: '#10B981', borderColor: '#10B981' }}
-                        >
-                          {isPaid ? <Edit3 size={13} /> : <DollarSign size={13} />}
-                          <span>{isPaid ? 'Ver / Editar Pgto' : 'Marcar Dia como Pago'}</span>
-                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          {item.conferenceRecord && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenConference(item.courierName, item.dateStr, item.conferenceStatus === 'pending' ? 'pending' : 'resolved')}
+                              className="btn btn-secondary btn-sm"
+                              style={{
+                                padding: '4px 8px',
+                                fontSize: '0.74rem',
+                                color: '#38BDF8',
+                                borderColor: 'rgba(56, 189, 248, 0.35)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}
+                              title="Visualizar fechamento e conferência deste dia"
+                            >
+                              <FileText size={12} />
+                              <span>{item.conferenceStatus === 'approved' ? 'Conferido' : 'Conferência'}</span>
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setPaymentModalData({
+                              courierName: item.courierName,
+                              courier: item.courier,
+                              dateStr: item.dateStr,
+                              dayDeliveries: item.deliveries,
+                              existingPayment: item.payment,
+                              initialRetainedCash: item.retainedCash
+                            })}
+                            className={isPaid ? "btn btn-secondary btn-sm" : "btn btn-success btn-sm"}
+                            style={isPaid ? {} : { fontWeight: 800 }}
+                          >
+                            {isPaid ? <Edit3 size={13} /> : <DollarSign size={13} />}
+                            <span>{isPaid ? 'Ver / Editar Pgto' : 'Marcar Dia como Pago'}</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -2465,7 +2646,10 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       {/* Courier Adjustments Review & OK Modal */}
       <CourierAdjustmentsModal
         isOpen={showAdjustmentsModal}
-        onClose={() => setShowAdjustmentsModal(false)}
+        onClose={() => {
+          setShowAdjustmentsModal(false);
+          setAdjustmentsModalInitialDate(undefined);
+        }}
         onSuccess={() => {
           onRefresh();
           fetchAdjustments();
@@ -2474,6 +2658,9 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         couriers={couriers}
         deliveries={deliveries}
         orders={orders}
+        initialTab={adjustmentsModalInitialTab}
+        initialCourier={adjustmentsModalInitialCourier}
+        initialDate={adjustmentsModalInitialDate}
       />
 
       {/* Portal do Motoboy: Link Sharing & PIN Management Modal */}

@@ -35,6 +35,9 @@ interface CourierAdjustmentsModalProps {
   couriers: Courier[];
   deliveries: Delivery[];
   orders?: Order[];
+  initialTab?: 'pending' | 'resolved';
+  initialCourier?: string;
+  initialDate?: string;
 }
 
 export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = ({
@@ -43,12 +46,15 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
   onSuccess,
   couriers,
   deliveries,
-  orders = []
+  orders = [],
+  initialTab,
+  initialCourier,
+  initialDate
 }) => {
   const [adjustments, setAdjustments] = useState<CourierAdjustment[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [filterTab, setFilterTab] = useState<'pending' | 'resolved'>('pending');
-  const [selectedCourierFilter, setSelectedCourierFilter] = useState<string>('all');
+  const [filterTab, setFilterTab] = useState<'pending' | 'resolved'>(() => initialTab || 'pending');
+  const [selectedCourierFilter, setSelectedCourierFilter] = useState<string>(() => initialCourier || 'all');
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [isProcessingAll, setIsProcessingAll] = useState<boolean>(false);
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
@@ -66,7 +72,14 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
       if (error) {
         console.error('Erro ao buscar solicitações de motoboys:', error);
       } else if (data) {
-        setAdjustments(data as CourierAdjustment[]);
+        const adjs = data as CourierAdjustment[];
+        setAdjustments(adjs);
+
+        // If no explicit initial tab was chosen, default to 'resolved' if there are 0 pending items
+        if (!initialTab) {
+          const hasPendings = adjs.some((a) => a.status === 'pending');
+          setFilterTab(hasPendings ? 'pending' : 'resolved');
+        }
       }
     } catch (err) {
       console.error('Falha ao carregar ajustes:', err);
@@ -77,9 +90,15 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
 
   useEffect(() => {
     if (isOpen) {
+      if (initialTab) setFilterTab(initialTab);
+      if (initialCourier) setSelectedCourierFilter(initialCourier);
+      if (initialDate) {
+        setExpandedDays((prev) => ({ ...prev, [initialDate]: true }));
+        setExpandedDeliveryLists((prev) => ({ ...prev, [initialDate]: true }));
+      }
       fetchAdjustments();
     }
-  }, [isOpen]);
+  }, [isOpen, initialTab, initialCourier, initialDate]);
 
   // Fast map to find matching order and customer name
   const ordersMap = useMemo(() => {
@@ -223,6 +242,10 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
 
   const totalPendingCount = useMemo(() => {
     return adjustments.filter((a) => a.status === 'pending').length;
+  }, [adjustments]);
+
+  const totalResolvedCount = useMemo(() => {
+    return adjustments.filter((a) => a.status !== 'pending' && a.type === 'daily_conference').length;
   }, [adjustments]);
 
   // Handle Approve a Single Adjustment Item
@@ -870,13 +893,28 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
                 borderRadius: '6px',
                 border: 'none',
                 fontSize: '0.82rem',
-                fontWeight: 600,
+                fontWeight: 700,
                 cursor: 'pointer',
-                backgroundColor: filterTab === 'resolved' ? 'var(--accent-primary)' : 'transparent',
-                color: filterTab === 'resolved' ? '#FFFFFF' : 'var(--text-secondary)'
+                backgroundColor: filterTab === 'resolved' ? '#0284C7' : 'transparent',
+                color: filterTab === 'resolved' ? '#FFFFFF' : 'var(--text-secondary)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
               }}
             >
-              <span>Histórico Concluído</span>
+              <span>Conferências Realizadas (Histórico)</span>
+              {totalResolvedCount > 0 && (
+                <span style={{
+                  backgroundColor: filterTab === 'resolved' ? '#FFFFFF' : 'rgba(56, 189, 248, 0.25)',
+                  color: filterTab === 'resolved' ? '#0369A1' : '#38BDF8',
+                  padding: '1px 6px',
+                  borderRadius: '10px',
+                  fontSize: '0.7rem',
+                  fontWeight: 800
+                }}>
+                  {totalResolvedCount}
+                </span>
+              )}
             </button>
           </div>
 
@@ -1442,6 +1480,53 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
                             : `Dar OK e Aprovar Conferência do Dia (${group.pendingCount} itens)`}
                         </span>
                       </button>
+                    </div>
+                  )}
+
+                  {/* Day Footer for Already Concluded / Approved Conferences */}
+                  {!group.hasPending && group.conferenceRecord && (
+                    <div style={{
+                      marginTop: '14px',
+                      paddingTop: '12px',
+                      borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: '10px',
+                      fontSize: '0.82rem',
+                      color: '#94A3B8'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <span style={{
+                          backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                          color: '#34D399',
+                          padding: '3px 10px',
+                          borderRadius: '8px',
+                          fontWeight: 700,
+                          fontSize: '0.76rem',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          border: '1px solid rgba(16, 185, 129, 0.3)'
+                        }}>
+                          <CheckCircle2 size={13} color="#34D399" />
+                          Conferência Realizada e Aprovada
+                        </span>
+                        {group.conferenceRecord.reviewed_at && (
+                          <span style={{ color: '#CBD5E1', fontSize: '0.78rem' }}>
+                            em {formatDateTime(group.conferenceRecord.reviewed_at)}
+                          </span>
+                        )}
+                        {group.conferenceRecord.reviewed_by && (
+                          <span style={{ color: '#94A3B8', fontSize: '0.78rem' }}>
+                            por <strong style={{ color: '#F8FAFC' }}>{group.conferenceRecord.reviewed_by}</strong>
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.74rem', color: '#64748B' }}>
+                        Fechamento registrado e conferido no sistema
+                      </div>
                     </div>
                   )}
                 </div>

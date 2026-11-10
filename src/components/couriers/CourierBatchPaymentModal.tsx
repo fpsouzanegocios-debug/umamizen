@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { X, Check, DollarSign, Calendar, Copy, CheckCheck, AlertCircle, CheckCircle2, User, Layers } from 'lucide-react';
+import { X, DollarSign, Calendar, Copy, CheckCheck, AlertCircle, CheckCircle2, User, Layers, Wallet, ArrowRight, ShieldCheck, Sparkles } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { Courier, Delivery, CourierDailyPayment } from '../../types';
 import { formatCurrency } from '../../lib/formatters';
@@ -76,12 +76,12 @@ export const CourierBatchPaymentModal: React.FC<CourierBatchPaymentModalProps> =
       baseTotal,
       additionalsTotal,
       grossTotal,
-      retainedCashTotal,
-      totalToPay: Math.max(0, totalToPay)
+      retainedCashTotal: Math.round(retainedCashTotal * 100) / 100,
+      totalToPay: Math.max(0, Math.round(totalToPay * 100) / 100)
     };
   }, [itemsToProcess]);
 
-  // Group by Courier for individual summary cards & Pix keys
+  // Group items by courier for clear multi-courier payout visualization
   const courierGroups = useMemo(() => {
     const map = new Map<string, {
       courierName: string;
@@ -161,10 +161,10 @@ export const CourierBatchPaymentModal: React.FC<CourierBatchPaymentModalProps> =
           base_amount: item.baseTotal,
           additional_total: item.additionalsTotal,
           additional_amount: item.additionalsTotal,
-          retained_cash: numRetained,
-          total_paid: numPaid,
-          paid_amount: numPaid,
-          total_amount: effectiveTotalAmount,
+          retained_cash: Math.round(numRetained * 100) / 100,
+          total_paid: Math.round(numPaid * 100) / 100,
+          paid_amount: Math.round(numPaid * 100) / 100,
+          total_amount: Math.round(effectiveTotalAmount * 100) / 100,
           payment_method: paymentMethod,
           is_paid: true,
           paid_at: paidDateIso,
@@ -180,11 +180,11 @@ export const CourierBatchPaymentModal: React.FC<CourierBatchPaymentModalProps> =
           .maybeSingle();
 
         if (payErr) {
-          console.error('Erro ao registrar courier_daily_payments no lote:', payErr);
+          console.error(`Erro ao salvar diária de ${item.courierName} (${item.dateStr}):`, payErr);
           throw payErr;
         }
 
-        // Mark deliveries of this day as paid
+        // Mark deliveries of this courier on this day as paid
         const deliveryIds = item.deliveries.map((d) => d.id);
         if (deliveryIds.length > 0) {
           const { error: delivErr } = await supabase
@@ -196,7 +196,7 @@ export const CourierBatchPaymentModal: React.FC<CourierBatchPaymentModalProps> =
             .in('id', deliveryIds);
 
           if (delivErr) {
-            console.error('Erro ao atualizar status nas entregas no lote:', delivErr);
+            console.error(`Erro ao marcar entregas como pagas de ${item.courierName}:`, delivErr);
           }
         }
       }
@@ -219,7 +219,9 @@ export const CourierBatchPaymentModal: React.FC<CourierBatchPaymentModalProps> =
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.75)',
+      backgroundColor: 'rgba(7, 11, 20, 0.82)',
+      backdropFilter: 'blur(8px)',
+      WebkitBackdropFilter: 'blur(8px)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -227,107 +229,162 @@ export const CourierBatchPaymentModal: React.FC<CourierBatchPaymentModalProps> =
       padding: '16px'
     }}>
       <div style={{
-        backgroundColor: 'var(--bg-card)',
-        borderRadius: '16px',
-        border: '1px solid var(--border-color)',
+        backgroundColor: '#111827',
+        borderRadius: '20px',
+        border: '1px solid rgba(255, 255, 255, 0.1)',
         width: '100%',
-        maxWidth: '680px',
-        maxHeight: '90vh',
+        maxWidth: '720px',
+        maxHeight: '92vh',
         overflowY: 'auto',
-        padding: '24px',
-        boxShadow: '0 20px 40px rgba(0, 0, 0, 0.5)'
+        padding: '26px 28px',
+        boxShadow: '0 25px 60px rgba(0, 0, 0, 0.65)',
+        position: 'relative'
       }}>
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '22px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
             <div style={{
-              width: '44px',
-              height: '44px',
-              borderRadius: '10px',
-              backgroundColor: 'rgba(16, 185, 129, 0.15)',
+              width: '46px',
+              height: '46px',
+              borderRadius: '12px',
+              background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(5, 150, 105, 0.3) 100%)',
+              border: '1px solid rgba(16, 185, 129, 0.4)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#10B981'
+              color: '#34D399',
+              boxShadow: '0 4px 12px rgba(16, 185, 129, 0.2)'
             }}>
               <CheckCircle2 size={24} />
             </div>
             <div>
-              <h3 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#F8FAFC', margin: 0 }}>
-                Concluir Pagamento em Lote
-              </h3>
-              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
-                {itemsToProcess.length} {itemsToProcess.length === 1 ? 'diária selecionada' : 'diárias selecionadas'} • Total: <strong style={{ color: '#10B981' }}>{formatCurrency(summary.totalToPay)}</strong>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h3 style={{ fontSize: '1.3rem', fontWeight: 800, color: '#F8FAFC', margin: 0, letterSpacing: '-0.02em' }}>
+                  Concluir Pagamento em Lote
+                </h3>
+                <span style={{
+                  backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                  color: '#34D399',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  padding: '2px 8px',
+                  borderRadius: '12px',
+                  fontSize: '0.72rem',
+                  fontWeight: 700
+                }}>
+                  {itemsToProcess.length} {itemsToProcess.length === 1 ? 'diária' : 'diárias'}
+                </span>
+              </div>
+              <p style={{ fontSize: '0.82rem', color: '#94A3B8', margin: '4px 0 0 0' }}>
+                Liquidação financeira consolidada de diárias e conciliação de entregas
               </p>
             </div>
           </div>
+
           <button
             onClick={onClose}
             disabled={isSubmitting}
-            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
+            style={{
+              background: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              borderRadius: '10px',
+              width: '34px',
+              height: '34px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#94A3B8',
+              cursor: 'pointer',
+              transition: 'all 0.2s'
+            }}
+            title="Fechar modal"
           >
-            <X size={20} />
+            <X size={18} />
           </button>
         </div>
 
         {/* Global Financial Metrics Cards */}
         <div style={{
-          backgroundColor: 'var(--bg-input)',
-          borderRadius: '12px',
-          padding: '14px 16px',
-          marginBottom: '18px',
-          border: '1px solid rgba(255, 255, 255, 0.05)'
+          display: 'grid',
+          gridTemplateColumns: summary.retainedCashTotal > 0 ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)',
+          gap: '12px',
+          marginBottom: '20px'
         }}>
+          {/* 1. Diárias */}
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: summary.retainedCashTotal > 0 ? 'repeat(4, 1fr)' : 'repeat(3, 1fr)',
-            gap: '10px'
+            backgroundColor: '#1E293B',
+            borderRadius: '14px',
+            padding: '14px 16px',
+            border: '1px solid rgba(255, 255, 255, 0.07)'
           }}>
-            <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>DIÁRIAS</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#F8FAFC', marginTop: '2px' }}>
-                {itemsToProcess.length}
-              </div>
-              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                {summary.totalDeliveries} corridas
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.7rem', color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>
+              <Layers size={13} color="#38BDF8" />
+              <span>Diárias</span>
             </div>
-
-            <div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600 }}>TOTAL BRUTO</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#F8FAFC', marginTop: '2px' }}>
-                {formatCurrency(summary.grossTotal)}
-              </div>
-              <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                Base + Adicionais
-              </div>
+            <div style={{ fontSize: '1.45rem', fontWeight: 900, color: '#F8FAFC', marginTop: '4px' }}>
+              {itemsToProcess.length}
             </div>
+            <div style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '2px' }}>
+              {summary.totalDeliveries} corridas
+            </div>
+          </div>
 
-            {summary.retainedCashTotal > 0 && (
-              <div>
-                <div style={{ fontSize: '0.72rem', color: '#F43F5E', fontWeight: 600 }}>DINHEIRO RETIDO</div>
-                <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#F43F5E', marginTop: '2px' }}>
-                  -{formatCurrency(summary.retainedCashTotal)}
-                </div>
-                <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                  Abatido de Daniel
-                </div>
-              </div>
-            )}
+          {/* 2. Bruto */}
+          <div style={{
+            backgroundColor: '#1E293B',
+            borderRadius: '14px',
+            padding: '14px 16px',
+            border: '1px solid rgba(255, 255, 255, 0.07)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.7rem', color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>
+              <DollarSign size={13} color="#FBBF24" />
+              <span>Total Bruto</span>
+            </div>
+            <div style={{ fontSize: '1.45rem', fontWeight: 900, color: '#F8FAFC', marginTop: '4px' }}>
+              {formatCurrency(summary.grossTotal)}
+            </div>
+            <div style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: '2px' }}>
+              Base + Adicionais
+            </div>
+          </div>
 
+          {/* 3. Dinheiro Retido */}
+          {summary.retainedCashTotal > 0 && (
             <div style={{
-              backgroundColor: 'rgba(16, 185, 129, 0.12)',
-              borderRadius: '8px',
-              padding: '6px 10px',
-              border: '1px solid rgba(16, 185, 129, 0.35)'
+              backgroundColor: 'rgba(244, 63, 94, 0.08)',
+              borderRadius: '14px',
+              padding: '14px 16px',
+              border: '1px solid rgba(244, 63, 94, 0.25)'
             }}>
-              <div style={{ fontSize: '0.72rem', color: '#10B981', fontWeight: 700 }}>LÍQUIDO A PAGAR</div>
-              <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#10B981', marginTop: '2px' }}>
-                {formatCurrency(summary.totalToPay)}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.7rem', color: '#FB7185', fontWeight: 700, textTransform: 'uppercase' }}>
+                <Wallet size={13} color="#F43F5E" />
+                <span>Dinheiro Retido</span>
               </div>
-              <div style={{ fontSize: '0.68rem', color: '#34D399' }}>
-                Total a transferir
+              <div style={{ fontSize: '1.45rem', fontWeight: 900, color: '#F43F5E', marginTop: '4px' }}>
+                -{formatCurrency(summary.retainedCashTotal)}
               </div>
+              <div style={{ fontSize: '0.72rem', color: '#FB7185', marginTop: '2px' }}>
+                Abatido em mãos (Daniel)
+              </div>
+            </div>
+          )}
+
+          {/* 4. Líquido a Pagar */}
+          <div style={{
+            background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(5, 150, 105, 0.22) 100%)',
+            borderRadius: '14px',
+            padding: '14px 16px',
+            border: '1.5px solid rgba(16, 185, 129, 0.45)',
+            boxShadow: '0 4px 16px rgba(16, 185, 129, 0.15)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.7rem', color: '#34D399', fontWeight: 800, textTransform: 'uppercase' }}>
+              <Sparkles size={13} color="#34D399" />
+              <span>Líquido a Pagar</span>
+            </div>
+            <div style={{ fontSize: '1.55rem', fontWeight: 900, color: '#34D399', marginTop: '4px', letterSpacing: '-0.02em' }}>
+              {formatCurrency(summary.totalToPay)}
+            </div>
+            <div style={{ fontSize: '0.72rem', color: '#A7F3D0', marginTop: '2px', fontWeight: 600 }}>
+              Total a transferir
             </div>
           </div>
         </div>
@@ -337,41 +394,41 @@ export const CourierBatchPaymentModal: React.FC<CourierBatchPaymentModalProps> =
           <div style={{
             backgroundColor: 'rgba(251, 191, 36, 0.08)',
             border: '1px solid rgba(251, 191, 36, 0.3)',
-            borderRadius: '10px',
-            padding: '10px 14px',
-            marginBottom: '16px',
+            borderRadius: '12px',
+            padding: '10px 16px',
+            marginBottom: '18px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             flexWrap: 'wrap',
-            gap: '8px'
+            gap: '10px'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', color: '#CBD5E1' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.82rem', color: '#E2E8F0' }}>
               <AlertCircle size={16} color="#FBBF24" style={{ flexShrink: 0 }} />
               <span>
-                Você selecionou <strong>{pendingItems.length} diária(s) pendente(s)</strong> e <strong>{paidItems.length} já paga(s)</strong>.
+                Seleção mista: <strong>{pendingItems.length} pendente(s)</strong> e <strong>{paidItems.length} já paga(s)</strong>.
               </span>
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: '#F8FAFC', cursor: 'pointer', margin: 0 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', color: '#F8FAFC', cursor: 'pointer', margin: 0, fontWeight: 600 }}>
               <input
                 type="checkbox"
                 checked={onlyPending}
                 onChange={(e) => setOnlyPending(e.target.checked)}
-                style={{ cursor: 'pointer' }}
+                style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#10B981' }}
               />
-              <span>Pagar apenas as pendentes ({pendingItems.length})</span>
+              <span>Processar apenas pendentes ({pendingItems.length})</span>
             </label>
           </div>
         )}
 
         {/* Breakdown by Courier Card List */}
-        <div style={{ marginBottom: '20px' }}>
-          <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <User size={13} />
+        <div style={{ marginBottom: '22px' }}>
+          <div style={{ fontSize: '0.76rem', fontWeight: 800, color: '#94A3B8', textTransform: 'uppercase', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px', letterSpacing: '0.04em' }}>
+            <User size={13} color="#38BDF8" />
             <span>Valores por Entregador ({courierGroups.length}):</span>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '220px', overflowY: 'auto', paddingRight: '4px' }}>
             {courierGroups.map((grp) => {
               const formattedDates = grp.dates
                 .map((d) => d.split('-').reverse().slice(0, 2).join('/'))
@@ -381,32 +438,48 @@ export const CourierBatchPaymentModal: React.FC<CourierBatchPaymentModalProps> =
                 <div
                   key={grp.courierName}
                   style={{
-                    backgroundColor: 'var(--bg-input)',
-                    borderRadius: '8px',
-                    padding: '10px 14px',
+                    backgroundColor: '#1E293B',
+                    borderRadius: '12px',
+                    padding: '12px 16px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     flexWrap: 'wrap',
-                    gap: '10px',
-                    border: '1px solid rgba(255, 255, 255, 0.05)'
+                    gap: '12px',
+                    border: '1px solid rgba(255, 255, 255, 0.08)'
                   }}
                 >
-                  <div>
-                    <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#F8FAFC' }}>
-                      {grp.courierName}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div style={{
+                      width: '36px',
+                      height: '36px',
+                      borderRadius: '10px',
+                      backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                      color: '#38BDF8',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 800,
+                      fontSize: '0.9rem'
+                    }}>
+                      {grp.courierName.charAt(0).toUpperCase()}
                     </div>
-                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                      {grp.items.length} {grp.items.length === 1 ? 'diária' : 'diárias'} ({formattedDates}) • {grp.totalDeliveries} entregas
-                      {grp.retainedCash > 0 && (
-                        <span style={{ color: '#F43F5E', marginLeft: '6px' }}>
-                          (-{formatCurrency(grp.retainedCash)} retido)
-                        </span>
-                      )}
+                    <div>
+                      <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#F8FAFC' }}>
+                        {grp.courierName}
+                      </div>
+                      <div style={{ fontSize: '0.74rem', color: '#94A3B8', marginTop: '2px' }}>
+                        {grp.items.length} {grp.items.length === 1 ? 'diária' : 'diárias'} ({formattedDates}) • {grp.totalDeliveries} entregas
+                        {grp.retainedCash > 0 && (
+                          <span style={{ color: '#FB7185', marginLeft: '6px', fontWeight: 600 }}>
+                            (-{formatCurrency(grp.retainedCash)} retido)
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                     {/* Pix key copy if available */}
                     {grp.courier?.pix_key ? (
                       <button
@@ -414,28 +487,39 @@ export const CourierBatchPaymentModal: React.FC<CourierBatchPaymentModalProps> =
                         onClick={() => handleCopyPix(grp.courier!.pix_key!, grp.courierName)}
                         className="btn btn-secondary btn-sm"
                         style={{
-                          fontSize: '0.72rem',
-                          padding: '3px 8px',
+                          fontSize: '0.74rem',
+                          padding: '4px 10px',
                           display: 'flex',
                           alignItems: 'center',
-                          gap: '4px',
-                          borderColor: copiedPixCourierId === grp.courierName ? '#10B981' : undefined,
-                          color: copiedPixCourierId === grp.courierName ? '#10B981' : undefined
+                          gap: '6px',
+                          borderColor: copiedPixCourierId === grp.courierName ? '#10B981' : 'rgba(255, 255, 255, 0.15)',
+                          color: copiedPixCourierId === grp.courierName ? '#10B981' : '#F8FAFC',
+                          backgroundColor: copiedPixCourierId === grp.courierName ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                          fontWeight: 600
                         }}
                         title={`Chave Pix: ${grp.courier.pix_key}`}
                       >
-                        {copiedPixCourierId === grp.courierName ? <CheckCheck size={12} /> : <Copy size={12} />}
-                        <span>{copiedPixCourierId === grp.courierName ? 'Copiado!' : 'Copiar Pix'}</span>
+                        {copiedPixCourierId === grp.courierName ? <CheckCheck size={13} color="#10B981" /> : <Copy size={13} />}
+                        <span>{copiedPixCourierId === grp.courierName ? 'Copiado!' : 'Copiar Chave Pix'}</span>
                       </button>
                     ) : (
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Sem chave Pix</span>
+                      <span style={{
+                        fontSize: '0.72rem',
+                        color: '#94A3B8',
+                        backgroundColor: 'rgba(148, 163, 184, 0.1)',
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        fontWeight: 600
+                      }}>
+                        Sem chave Pix
+                      </span>
                     )}
 
-                    <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '1.05rem', fontWeight: 800, color: grp.totalToPay >= 0 ? '#10B981' : '#F43F5E' }}>
+                    <div style={{ textAlign: 'right', minWidth: '100px' }}>
+                      <div style={{ fontSize: '1.15rem', fontWeight: 900, color: grp.totalToPay >= 0 ? '#34D399' : '#FB7185' }}>
                         {formatCurrency(Math.max(0, grp.totalToPay))}
                       </div>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>líquido</div>
+                      <div style={{ fontSize: '0.68rem', color: '#94A3B8', fontWeight: 600 }}>líquido a transferir</div>
                     </div>
                   </div>
                 </div>
@@ -446,98 +530,155 @@ export const CourierBatchPaymentModal: React.FC<CourierBatchPaymentModalProps> =
 
         {/* Form Inputs */}
         <form onSubmit={handleConfirmBatchPayment}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
-            <div>
-              <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600 }}>
-                Forma de Pagamento
-              </label>
-              <select
-                className="form-control"
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value)}
-                disabled={isSubmitting}
-                style={{ fontSize: '0.85rem' }}
-              >
-                <option value="Pix">Pix</option>
-                <option value="Dinheiro">Dinheiro</option>
-                <option value="Transferência Bancária">Transferência Bancária</option>
-                <option value="Cartão de Débito">Cartão de Débito</option>
-                <option value="Outro">Outro</option>
-              </select>
+          <div style={{
+            backgroundColor: '#1E293B',
+            borderRadius: '14px',
+            padding: '16px 18px',
+            marginBottom: '20px',
+            border: '1px solid rgba(255, 255, 255, 0.08)'
+          }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#CBD5E1', marginBottom: '6px' }}>
+                  Forma de Pagamento
+                </label>
+                <select
+                  className="form-control"
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
+                  disabled={isSubmitting}
+                  style={{
+                    backgroundColor: '#0F172A',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '8px',
+                    padding: '8px 12px',
+                    color: '#F8FAFC',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    width: '100%',
+                    outline: 'none'
+                  }}
+                >
+                  <option value="Pix">Pix</option>
+                  <option value="Dinheiro">Dinheiro</option>
+                  <option value="Transferência Bancária">Transferência Bancária</option>
+                  <option value="Cartão de Débito">Cartão de Débito</option>
+                  <option value="Outro">Outro</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#CBD5E1', marginBottom: '6px' }}>
+                  Data do Pagamento
+                </label>
+                <input
+                  type="date"
+                  className="form-control"
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
+                  disabled={isSubmitting}
+                  style={{
+                    backgroundColor: '#0F172A',
+                    border: '1px solid rgba(255, 255, 255, 0.15)',
+                    borderRadius: '8px',
+                    padding: '8px 12px',
+                    color: '#F8FAFC',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    width: '100%',
+                    outline: 'none'
+                  }}
+                />
+              </div>
             </div>
 
             <div>
-              <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600 }}>
-                Data do Pagamento
+              <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, color: '#CBD5E1', marginBottom: '6px' }}>
+                Observações (Opcional)
               </label>
               <input
-                type="date"
+                type="text"
                 className="form-control"
-                value={paymentDate}
-                onChange={(e) => setPaymentDate(e.target.value)}
+                placeholder="Ex: Acerto semanal consolidado das diárias de motoboy"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
                 disabled={isSubmitting}
-                style={{ fontSize: '0.85rem' }}
+                style={{
+                  backgroundColor: '#0F172A',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  borderRadius: '8px',
+                  padding: '9px 12px',
+                  color: '#F8FAFC',
+                  fontSize: '0.85rem',
+                  width: '100%',
+                  outline: 'none'
+                }}
               />
             </div>
           </div>
 
-          <div style={{ marginBottom: '20px' }}>
-            <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600 }}>
-              Observações (Opcional)
-            </label>
-            <input
-              type="text"
-              className="form-control"
-              placeholder="Ex: Pagamento semanal consolidado via Pix"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              disabled={isSubmitting}
-              style={{ fontSize: '0.85rem' }}
-            />
-          </div>
-
           {progressText && (
             <div style={{
-              fontSize: '0.8rem',
+              fontSize: '0.82rem',
               color: '#38BDF8',
-              marginBottom: '14px',
+              backgroundColor: 'rgba(56, 189, 248, 0.1)',
+              border: '1px solid rgba(56, 189, 248, 0.3)',
+              borderRadius: '8px',
+              padding: '8px 12px',
+              marginBottom: '16px',
               textAlign: 'center',
-              fontWeight: 600
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
             }}>
-              {progressText}
+              <span className="spinner" style={{ width: '14px', height: '14px' }}></span>
+              <span>{progressText}</span>
             </div>
           )}
 
           {/* Action Buttons */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '12px' }}>
             <button
               type="button"
               className="btn btn-secondary"
               onClick={onClose}
               disabled={isSubmitting}
+              style={{
+                padding: '11px 20px',
+                fontSize: '0.85rem',
+                fontWeight: 600,
+                borderRadius: '10px'
+              }}
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="btn btn-primary"
               disabled={isSubmitting || itemsToProcess.length === 0}
               style={{
-                backgroundColor: '#10B981',
-                borderColor: '#10B981',
-                color: '#0B0F19',
+                background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
+                color: '#FFFFFF',
+                border: 'none',
                 fontWeight: 800,
+                fontSize: '0.9rem',
+                padding: '12px 24px',
+                borderRadius: '10px',
+                boxShadow: '0 4px 16px rgba(16, 185, 129, 0.4)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
-                padding: '10px 18px'
+                cursor: (isSubmitting || itemsToProcess.length === 0) ? 'not-allowed' : 'pointer',
+                opacity: (isSubmitting || itemsToProcess.length === 0) ? 0.6 : 1,
+                transition: 'all 0.2s'
               }}
             >
               <CheckCircle2 size={18} />
               <span>
                 {isSubmitting
                   ? 'Concluindo pagamentos...'
-                  : `Confirmar e Marcar ${itemsToProcess.length} ${itemsToProcess.length === 1 ? 'Diária como Paga' : 'Diárias como Pagas'}`}
+                  : `Confirmar Pagamento (${formatCurrency(summary.totalToPay)})`}
               </span>
             </button>
           </div>
