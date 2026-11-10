@@ -1176,7 +1176,7 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
           .filter(Boolean)
       );
       const activeDeliveries = dayDels.filter(d => !removedIds.has(d.id));
-      const addedDeliveries = dayAdjs.filter(a => a.type === 'new_delivery' && a.status !== 'rejected');
+      const addedDeliveries = dayAdjs.filter(a => a.type === 'new_delivery' && a.status === 'pending');
       const totalDeliveriesCount = activeDeliveries.length + addedDeliveries.length;
 
       let dayFees = 0;
@@ -1447,9 +1447,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
       }
     });
 
-    // 6. Added deliveries (new_delivery) from database adjustments
+    // 6. Added deliveries (new_delivery) from database adjustments (pending only, approved are already in deliveries)
     dayAdjustments.forEach((adj) => {
-      if (adj.type === 'new_delivery' && adj.status !== 'rejected') {
+      if (adj.type === 'new_delivery' && adj.status === 'pending') {
         const dayKey = adj.date || getLocalDateKey(dateRange.startDate);
         const bucket = getDayBucket(dayKey);
         bucket.count += 1;

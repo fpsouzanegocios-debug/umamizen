@@ -33,6 +33,7 @@ import { DeliveryCreateModal } from './DeliveryCreateModal';
 import { CourierPaymentModal } from './CourierPaymentModal';
 import { ReconciliationDetailModal, ReconciliationModalType, ReconciliationItem } from './ReconciliationDetailModal';
 import { CourierAdjustmentsModal } from './CourierAdjustmentsModal';
+import { CourierBatchPaymentModal } from './CourierBatchPaymentModal';
 import { Smartphone, Key, Send, Copy, ExternalLink, CheckCircle2, EyeOff } from 'lucide-react';
 
 interface CouriersViewProps {
@@ -71,6 +72,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   const [newCourierPix, setNewCourierPix] = useState<string>('');
   const [newCourierPin, setNewCourierPin] = useState<string>('1234');
   const [showAdjustmentsModal, setShowAdjustmentsModal] = useState<boolean>(false);
+  const [showBatchPaymentModal, setShowBatchPaymentModal] = useState<boolean>(false);
   const [pendingAdjustmentsCount, setPendingAdjustmentsCount] = useState<number>(0);
   const [showPortalShareModal, setShowPortalShareModal] = useState<boolean>(false);
   const [editingCourierPin, setEditingCourierPin] = useState<{ id: string; name: string; pin: string } | null>(null);
@@ -542,6 +544,14 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       paidCount,
       pendingCount
     };
+  }, [displayedSettlements, selectedSettlementKeys]);
+
+  // Selected settlement item objects for batch actions
+  const selectedSettlementItems = useMemo(() => {
+    if (selectedSettlementKeys.size === 0) return [];
+    return displayedSettlements.filter((item) =>
+      selectedSettlementKeys.has(`${item.dateStr}_${item.courierName.toLowerCase()}`)
+    );
   }, [displayedSettlements, selectedSettlementKeys]);
 
   // Reconciliation Cash / Card breakdown (Section 15)
@@ -1306,6 +1316,29 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
               {selectedSettlementKeys.size > 0 && (
                 <button
                   type="button"
+                  onClick={() => setShowBatchPaymentModal(true)}
+                  className="btn btn-primary btn-sm"
+                  style={{
+                    fontSize: '0.74rem',
+                    padding: '4px 10px',
+                    backgroundColor: '#10B981',
+                    borderColor: '#10B981',
+                    color: '#0B0F19',
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    boxShadow: '0 2px 6px rgba(16, 185, 129, 0.35)'
+                  }}
+                  title="Concluir pagamento em lote das diárias selecionadas"
+                >
+                  <CheckCircle2 size={13} />
+                  <span>Concluir Pagamento ({selectedSettlementsSummary?.pendingCount ?? selectedSettlementKeys.size})</span>
+                </button>
+              )}
+              {selectedSettlementKeys.size > 0 && (
+                <button
+                  type="button"
                   onClick={clearSelectedSettlements}
                   className="btn btn-secondary btn-sm"
                   style={{ fontSize: '0.74rem', padding: '4px 8px', color: '#F43F5E', borderColor: 'rgba(244, 63, 94, 0.3)' }}
@@ -1367,14 +1400,37 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                     </span>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={clearSelectedSettlements}
-                    className="btn btn-secondary btn-sm"
-                    style={{ fontSize: '0.72rem', padding: '3px 8px' }}
-                  >
-                    Desmarcar Todos
-                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => setShowBatchPaymentModal(true)}
+                      className="btn btn-primary btn-sm"
+                      style={{
+                        backgroundColor: '#10B981',
+                        borderColor: '#10B981',
+                        color: '#0B0F19',
+                        fontWeight: 800,
+                        fontSize: '0.78rem',
+                        padding: '6px 14px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        boxShadow: '0 2px 8px rgba(16, 185, 129, 0.35)'
+                      }}
+                      title="Concluir pagamento de todas as diárias selecionadas"
+                    >
+                      <CheckCircle2 size={15} />
+                      <span>Concluir Pagamento ({selectedSettlementsSummary.pendingCount} {selectedSettlementsSummary.pendingCount === 1 ? 'pendente' : 'pendentes'})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearSelectedSettlements}
+                      className="btn btn-secondary btn-sm"
+                      style={{ fontSize: '0.72rem', padding: '5px 10px' }}
+                    >
+                      Desmarcar Todos
+                    </button>
+                  </div>
                 </div>
 
                 <div style={{
@@ -2364,6 +2420,21 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
           existingPayment={paymentModalData.existingPayment}
           initialRetainedCash={paymentModalData.initialRetainedCash}
           ordersMap={ordersMap}
+        />
+      )}
+
+      {/* Batch Daily Courier Payment Modal */}
+      {showBatchPaymentModal && (
+        <CourierBatchPaymentModal
+          isOpen={showBatchPaymentModal}
+          onClose={() => setShowBatchPaymentModal(false)}
+          onSuccess={() => {
+            setShowBatchPaymentModal(false);
+            onRefresh();
+            fetchDailyPayments();
+            clearSelectedSettlements();
+          }}
+          selectedSettlements={selectedSettlementItems}
         />
       )}
 

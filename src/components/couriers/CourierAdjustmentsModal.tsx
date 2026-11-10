@@ -161,7 +161,7 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           .filter(Boolean)
       );
       const activeDeliveries = dayDeliveries.filter(d => !removedDeliveryIds.has(d.id));
-      const addedDeliveries = grp.adjustments.filter(a => a.type === 'new_delivery' && a.status !== 'rejected');
+      const addedDeliveries = grp.adjustments.filter(a => a.type === 'new_delivery' && a.status === 'pending');
       const totalDeliveriesCount = activeDeliveries.length + addedDeliveries.length;
 
       // 2. Fees Calculation
@@ -229,6 +229,7 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
   const handleApprove = async (adj: CourierAdjustment) => {
     setProcessingId(adj.id);
     try {
+      let createdDeliveryId: string | null = null;
       if (adj.type === 'edit_fee' && adj.delivery_id) {
         const currentDelivery = deliveries.find((d) => d.id === adj.delivery_id);
         const baseRate = Number(currentDelivery?.base_rate || 8.00);
@@ -300,7 +301,7 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
         const baseRate = Math.min(8.00, proposedFee);
         const additionalRate = Math.max(0, proposedFee - baseRate);
 
-        const { error: insError } = await supabase
+        const { data: insDel, error: insError } = await supabase
           .from('deliveries')
           .insert({
             external_order_id: `MOTOBOY-${Date.now()}-${Math.random().toString(36).substring(7)}`,
@@ -318,9 +319,12 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
             status: 'delivered',
             is_manually_edited: true,
             notes: `Corrida adicionada pelo motoboy e aprovada: ${adj.notes || ''}`
-          });
+          })
+          .select('id')
+          .single();
 
         if (insError) throw insError;
+        createdDeliveryId = insDel?.id || null;
 
       } else if (adj.type === 'remove_delivery' && adj.delivery_id) {
         const { error: delError } = await supabase
@@ -336,7 +340,8 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
         .update({
           status: 'approved',
           reviewed_at: new Date().toISOString(),
-          reviewed_by: 'Administrador'
+          reviewed_by: 'Administrador',
+          ...(createdDeliveryId ? { delivery_id: createdDeliveryId } : {})
         })
         .eq('id', adj.id);
 
@@ -422,6 +427,7 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
     setProcessingId(group.key);
     try {
       for (const adj of pendings) {
+        let createdDeliveryId: string | null = null;
         if (adj.type === 'edit_fee' && adj.delivery_id) {
           const currentDelivery = deliveries.find((d) => d.id === adj.delivery_id);
           const baseRate = Number(currentDelivery?.base_rate || 8.00);
@@ -491,7 +497,7 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           const baseRate = Math.min(8.00, proposedFee);
           const additionalRate = Math.max(0, proposedFee - baseRate);
 
-          await supabase
+          const { data: insDel } = await supabase
             .from('deliveries')
             .insert({
               external_order_id: `MOTOBOY-${Date.now()}-${Math.random().toString(36).substring(7)}`,
@@ -509,7 +515,11 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
               status: 'delivered',
               is_manually_edited: true,
               notes: `Corrida adicionada pelo motoboy e aprovada: ${adj.notes || ''}`
-            });
+            })
+            .select('id')
+            .single();
+
+          createdDeliveryId = insDel?.id || null;
 
         } else if (adj.type === 'remove_delivery' && adj.delivery_id) {
           await supabase
@@ -523,7 +533,8 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           .update({
             status: 'approved',
             reviewed_at: new Date().toISOString(),
-            reviewed_by: 'Administrador'
+            reviewed_by: 'Administrador',
+            ...(createdDeliveryId ? { delivery_id: createdDeliveryId } : {})
           })
           .eq('id', adj.id);
       }
@@ -575,6 +586,7 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
     setIsProcessingAll(true);
     try {
       for (const adj of pendings) {
+        let createdDeliveryId: string | null = null;
         if (adj.type === 'edit_fee' && adj.delivery_id) {
           const currentDelivery = deliveries.find((d) => d.id === adj.delivery_id);
           const baseRate = Number(currentDelivery?.base_rate || 8.00);
@@ -644,7 +656,7 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           const baseRate = Math.min(8.00, proposedFee);
           const additionalRate = Math.max(0, proposedFee - baseRate);
 
-          await supabase
+          const { data: insDel } = await supabase
             .from('deliveries')
             .insert({
               external_order_id: `MOTOBOY-${Date.now()}-${Math.random().toString(36).substring(7)}`,
@@ -662,7 +674,11 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
               status: 'delivered',
               is_manually_edited: true,
               notes: `Corrida adicionada pelo motoboy e aprovada: ${adj.notes || ''}`
-            });
+            })
+            .select('id')
+            .single();
+
+          createdDeliveryId = insDel?.id || null;
 
         } else if (adj.type === 'remove_delivery' && adj.delivery_id) {
           await supabase
@@ -676,7 +692,8 @@ export const CourierAdjustmentsModal: React.FC<CourierAdjustmentsModalProps> = (
           .update({
             status: 'approved',
             reviewed_at: new Date().toISOString(),
-            reviewed_by: 'Administrador'
+            reviewed_by: 'Administrador',
+            ...(createdDeliveryId ? { delivery_id: createdDeliveryId } : {})
           })
           .eq('id', adj.id);
       }
