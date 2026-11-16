@@ -1365,6 +1365,28 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
   const isDaniel = authenticatedCourier?.name.toLowerCase().includes('daniel') || false;
 
+  // Dominant operational shift date derived directly from visible deliveries
+  const computedConferenceDate = useMemo(() => {
+    if (courierDeliveries.length > 0) {
+      const counts = new Map<string, number>();
+      courierDeliveries.forEach((d) => {
+        if (!d.delivery_date) return;
+        const k = getOperationalDateKey(d.delivery_date);
+        if (k) counts.set(k, (counts.get(k) || 0) + 1);
+      });
+      let topKey = '';
+      let topCount = 0;
+      counts.forEach((count, key) => {
+        if (count > topCount) {
+          topCount = count;
+          topKey = key;
+        }
+      });
+      if (topKey) return topKey;
+    }
+    return selectedDate;
+  }, [courierDeliveries, selectedDate]);
+
   // Deliveries total fee calculation, cash retention and daily net settlement
   const stats = useMemo(() => {
     // 1. Map local drafts by delivery_id
@@ -1571,7 +1593,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     const finalNeighborhood = (proposedNeighborhood || editingDelivery.neighborhood_name || '').trim();
     const finalCustName = getCustomerName(editingDelivery);
     const parsedCash = isCashPayment ? parseFloat(cashAmount.replace(',', '.')) : null;
-    const deliveryDateKey = selectedDate;
+    const deliveryDateKey = editingDelivery.delivery_date
+      ? getOperationalDateKey(editingDelivery.delivery_date)
+      : selectedDate;
 
     const order = ordersMap.get(editingDelivery.external_order_id) || (editingDelivery.order_number ? ordersMap.get(editingDelivery.order_number) : undefined);
     const orderGross = Number(order?.gross_amount ?? editingDelivery.order_amount ?? 0);
@@ -1678,7 +1702,9 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
     e.preventDefault();
     if (!deletingDelivery || !authenticatedCourier) return;
 
-    const deliveryDateKey = selectedDate;
+    const deliveryDateKey = deletingDelivery.delivery_date
+      ? getOperationalDateKey(deletingDelivery.delivery_date)
+      : selectedDate;
 
     const newDraft: DraftAdjustment = {
       id: `draft_del_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -1713,11 +1739,31 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
 
     setIsSubmittingConference(true);
     try {
+      // Determine the shift operational date: if deliveries are displayed, derive from the dominant delivery date
+      let effectiveConferenceDate = selectedDate;
+      if (courierDeliveries.length > 0) {
+        const counts = new Map<string, number>();
+        courierDeliveries.forEach((d) => {
+          if (!d.delivery_date) return;
+          const k = getOperationalDateKey(d.delivery_date);
+          if (k) counts.set(k, (counts.get(k) || 0) + 1);
+        });
+        let topKey = '';
+        let topCount = 0;
+        counts.forEach((count, key) => {
+          if (count > topCount) {
+            topCount = count;
+            topKey = key;
+          }
+        });
+        if (topKey) effectiveConferenceDate = topKey;
+      }
+
       // 1. If there are draft adjustments, insert them in batch to Supabase courier_adjustments!
       if (draftAdjustments.length > 0) {
         const recordsToInsert = draftAdjustments.map((draft) => {
-          // Strictly attribute all adjustments to the shift date currently conferred
-          const itemDate = selectedDate;
+          // Strictly attribute adjustments to their specific date if set, or the shift date currently conferred
+          const itemDate = draft.date || effectiveConferenceDate;
           return {
             courier_id: authenticatedCourier.id,
             courier_name: authenticatedCourier.name,
@@ -1745,8 +1791,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
         if (adjsError) throw adjsError;
       }
 
-      // Always lock the daily conference to the date the courier is currently viewing and conferring
-      const targetConferenceDate = selectedDate;
+      // Always lock the daily conference to the true shift date
+      const targetConferenceDate = effectiveConferenceDate;
 
       // 2. Insert or update the daily conference record in Supabase
       const { data: existingConfs } = await supabase
@@ -4681,8 +4727,8 @@ export const CourierPortalView: React.FC<CourierPortalViewProps> = ({
                   <h3 style={{ fontSize: '1.05rem', fontWeight: 800, margin: 0, color: '#F8FAFC' }}>
                     Enviar Conferência do Dia
                   </h3>
-                  <p style={{ color: '#94A3B8', fontSize: '0.78rem', margin: 0 }}>
-                    {authenticatedCourier.name} — {dateRange.label || formatDateBR(new Date(selectedDate + 'T12:00:00'))}
+                  <p style={{ color: '#38BDF8', fontSize: '0.8rem', fontWeight: 700, margin: '2px 0 0 0' }}>
+                    {authenticatedCourier.name} — Turno de {formatDateBR(new Date(computedConferenceDate + 'T12:00:00'))}
                   </p>
                 </div>
               </div>
