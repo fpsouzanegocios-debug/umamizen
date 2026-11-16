@@ -222,6 +222,8 @@ export interface AccountsPayable {
   category: string;
   notes?: string;
   linked_cash_id?: string;
+  invoice_number?: string;
+  invoice_date?: string;
   created_at: string;
   updated_at: string;
 }

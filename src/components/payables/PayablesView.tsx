@@ -19,7 +19,9 @@ import {
   TrendingUp,
   Percent,
   ShoppingBag,
-  AlertTriangle
+  AlertTriangle,
+  FileText,
+  Search
 } from 'lucide-react';
 import { AccountsPayable, SystemSettings, DateRange, MonthlyGoal } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/formatters';
@@ -100,6 +102,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [periodFilter, setPeriodFilter] = useState<string>('period');
+  const [searchTerm, setSearchTerm] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
   // --- CREATE FORM STATES ---
@@ -112,6 +115,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   const [installmentInterval, setInstallmentInterval] = useState<'15' | '30' | '7' | 'custom'>('15');
   const [customIntervalDays, setCustomIntervalDays] = useState<number>(15);
   const [paymentMethod, setPaymentMethod] = useState<string>('Boleto');
+  const [invoiceNumber, setInvoiceNumber] = useState<string>('');
+  const [invoiceDate, setInvoiceDate] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
   const [customInstallments, setCustomInstallments] = useState<InstallmentRow[]>([]);
 
@@ -122,6 +127,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   const [editAmount, setEditAmount] = useState<number>(0);
   const [editCategory, setEditCategory] = useState<string>('Insumos (Geral)');
   const [editPaymentMethod, setEditPaymentMethod] = useState<string>('Boleto');
+  const [editInvoiceNumber, setEditInvoiceNumber] = useState<string>('');
+  const [editInvoiceDate, setEditInvoiceDate] = useState<string>('');
   const [editInstallmentNumber, setEditInstallmentNumber] = useState<number>(1);
   const [editTotalInstallments, setEditTotalInstallments] = useState<number>(1);
   const [editNotes, setEditNotes] = useState<string>('');
@@ -260,9 +267,17 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
 
       if (categoryFilter !== 'all' && p.category !== categoryFilter) return false;
 
+      if (searchTerm.trim()) {
+        const term = searchTerm.toLowerCase().trim();
+        const matchSupplier = p.supplier?.toLowerCase().includes(term);
+        const matchDesc = p.description?.toLowerCase().includes(term);
+        const matchNF = p.invoice_number?.toLowerCase().includes(term);
+        if (!matchSupplier && !matchDesc && !matchNF) return false;
+      }
+
       return true;
     });
-  }, [computedPayables, periodFilter, dateRange, statusFilter, categoryFilter]);
+  }, [computedPayables, periodFilter, dateRange, statusFilter, categoryFilter, searchTerm]);
 
   // Payables Table Pagination
   const [payablesCurrentPage, setPayablesCurrentPage] = useState<number>(1);
@@ -271,7 +286,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
   // Reset pagination when filters change
   useEffect(() => {
     setPayablesCurrentPage(1);
-  }, [statusFilter, categoryFilter, periodFilter, dateRange, selectedMonth, selectedYear]);
+  }, [statusFilter, categoryFilter, periodFilter, dateRange, selectedMonth, selectedYear, searchTerm]);
 
   const totalPayablesCount = filteredPayables.length;
   const payablesTotalPages = Math.max(1, Math.ceil(totalPayablesCount / payablesPerPage));
@@ -367,6 +382,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
     setEditAmount(Number(p.amount) || 0);
     setEditCategory(p.category || 'Insumos (Geral)');
     setEditPaymentMethod(p.payment_method || 'Boleto');
+    setEditInvoiceNumber(p.invoice_number || '');
+    setEditInvoiceDate(p.invoice_date || '');
     setEditInstallmentNumber(p.installment_number || 1);
     setEditTotalInstallments(p.total_installments || 1);
     setEditNotes(p.notes || '');
@@ -389,6 +406,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
           amount: Number(editAmount),
           category: editCategory,
           payment_method: editPaymentMethod,
+          invoice_number: editInvoiceNumber.trim() || null,
+          invoice_date: editInvoiceDate || null,
           installment_number: Number(editInstallmentNumber),
           total_installments: Number(editTotalInstallments),
           notes: editNotes.trim() || null,
@@ -554,6 +573,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             is_paid: false,
             payment_method: paymentMethod,
             category,
+            invoice_number: invoiceNumber.trim() || null,
+            invoice_date: invoiceDate || null,
             notes: notes.trim() || null
           });
         }
@@ -588,6 +609,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             is_paid: false,
             payment_method: paymentMethod,
             category,
+            invoice_number: invoiceNumber.trim() || null,
+            invoice_date: invoiceDate || null,
             notes: notes.trim() || null
           });
         }
@@ -601,6 +624,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
       setDescription('');
       setAmount(0);
       setInstallments(1);
+      setInvoiceNumber('');
+      setInvoiceDate('');
       setNotes('');
       setShowCreateModal(false);
       if (onCloseCreateModal) onCloseCreateModal();
@@ -921,6 +946,18 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
               <option key={cat} value={cat}>{cat}</option>
             ))}
           </select>
+
+          <div style={{ position: 'relative', flex: '1 1 240px', minWidth: '220px' }}>
+            <Search size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <input
+              type="text"
+              className="input"
+              style={{ paddingLeft: '32px', height: '38px', fontSize: '0.82rem', width: '100%' }}
+              placeholder="Buscar fornecedor, descrição, NF..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
         </div>
       </div>
 
@@ -988,6 +1025,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
             <tr>
               <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '110px' }}>Vencimento</th>
               <th style={{ position: 'sticky', top: 0, left: '110px', zIndex: 25, backgroundColor: '#0F172A', minWidth: '160px', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>Fornecedor</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '130px' }}>Nota Fiscal</th>
               <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '200px' }}>Descrição</th>
               <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '90px' }}>Parcela</th>
               <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '140px' }}>Categoria</th>
@@ -1001,7 +1039,7 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
           <tbody>
             {paginatedPayables.length === 0 ? (
               <tr>
-                <td colSpan={10} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                <td colSpan={11} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                   Nenhuma conta a pagar encontrada.
                 </td>
               </tr>
@@ -1031,6 +1069,37 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                     </td>
                     <td style={{ position: 'sticky', left: '110px', zIndex: 10, backgroundColor: '#0F172A', fontWeight: 600, color: '#F8FAFC', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>
                       {p.supplier}
+                    </td>
+                    <td style={{ fontSize: '0.82rem' }}>
+                      {p.invoice_number ? (
+                        <div>
+                          <span style={{ 
+                            display: 'inline-flex', 
+                            alignItems: 'center', 
+                            gap: '4px', 
+                            fontWeight: 600, 
+                            color: '#38BDF8',
+                            backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            border: '1px solid rgba(56, 189, 248, 0.25)'
+                          }}>
+                            <FileText size={11} />
+                            {p.invoice_number}
+                          </span>
+                          {p.invoice_date && (
+                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                              Emissão: {formatDate(p.invoice_date)}
+                            </div>
+                          )}
+                        </div>
+                      ) : p.invoice_date ? (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {formatDate(p.invoice_date)}
+                        </div>
+                      ) : (
+                        <span style={{ color: 'var(--text-muted)' }}>-</span>
+                      )}
                     </td>
                     <td style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {p.description}
@@ -1264,6 +1333,36 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
+                </div>
+              </div>
+
+              {/* Nota Fiscal Fields */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <FileText size={14} color="#38BDF8" />
+                    <span>Nº da Nota Fiscal (NF)</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={editInvoiceNumber}
+                    onChange={(e) => setEditInvoiceNumber(e.target.value)}
+                    placeholder="Ex: 12345 (Opcional)"
+                  />
+                </div>
+
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Calendar size={14} color="#38BDF8" />
+                    <span>Data da Nota Fiscal</span>
+                  </label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={editInvoiceDate}
+                    onChange={(e) => setEditInvoiceDate(e.target.value)}
+                  />
                 </div>
               </div>
 
@@ -1867,6 +1966,37 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Nota Fiscal Fields */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <FileText size={14} color="#38BDF8" />
+                    <span>Nº da Nota Fiscal (NF)</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="input"
+                    value={invoiceNumber}
+                    onChange={(e) => setInvoiceNumber(e.target.value)}
+                    placeholder="Ex: 12345 (Opcional)"
+                  />
+                </div>
+
+                <div className="form-group" style={{ margin: 0 }}>
+                  <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Calendar size={14} color="#38BDF8" />
+                    <span>Data da Nota Fiscal</span>
+                  </label>
+                  <input
+                    type="date"
+                    className="input"
+                    value={invoiceDate}
+                    onChange={(e) => setInvoiceDate(e.target.value)}
+                    title="Data de emissão da nota fiscal"
+                  />
+                </div>
+              </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
                 <div className="form-group" style={{ margin: 0 }}>
