@@ -2288,42 +2288,16 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         </div>
       </div>
 
-      {/* Top Synced Horizontal Scrollbar (Permite rolar lateralmente pelo topo sem descer a página) */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '5px 12px',
-        backgroundColor: '#0F172A',
-        border: '1px solid rgba(255, 255, 255, 0.08)',
-        borderBottom: 'none',
-        borderRadius: '10px 10px 0 0',
-        fontSize: '0.72rem',
-        color: '#94A3B8'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ color: '#38BDF8', fontWeight: 700 }}>↔ Rolagem Lateral Rápida:</span>
-          <span>Arraste a barra abaixo pelo topo ou pela tabela para ver colunas da direita</span>
-        </div>
-        <span style={{ color: '#64748B' }}>Dica: Shift + Scroll do mouse rola de lado</span>
-      </div>
-      <div
-        ref={topScrollRef}
+      {/* Top Synced Horizontal Scrollbar */}
+      <TableTopScroll
+        topScrollRef={topScrollRef}
         onScroll={handleTopScroll}
-        style={{
-          width: '100%',
-          overflowX: 'auto',
-          overflowY: 'hidden',
-          backgroundColor: '#090D16',
-          borderLeft: '1px solid rgba(255, 255, 255, 0.08)',
-          borderRight: '1px solid rgba(255, 255, 255, 0.08)',
-          height: '14px',
-          cursor: 'ew-resize'
-        }}
-        title="Role lateralmente por aqui sem descer a página"
-      >
-        <div style={{ width: `${Math.max(1450, tableScrollWidth)}px`, height: '1px' }} />
-      </div>
+        scrollWidth={Math.max(1450, tableScrollWidth)}
+        currentPage={safeDeliveriesPage}
+        totalPages={deliveriesTotalPages}
+        totalItems={filteredDeliveries.length}
+        label="entregas"
+      />
 
       {/* Deliveries Table Container */}
       <div 

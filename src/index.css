@@ -285,13 +285,30 @@ select.form-control option {
   border-radius: var(--radius);
   border: 1px solid var(--border-color);
   background: var(--bg-card);
+  /* Aceleração por hardware & rolagem ultra fluida a 60/120fps */
+  will-change: scroll-position;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scroll-behavior: auto !important;
 }
 
 .data-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   text-align: left;
   font-size: 0.875rem;
+}
+
+/* Promoção de células fixas (cabeçalho e colunas sticky) para camadas de GPU dedicadas */
+.table-container th[style*="position: sticky"],
+.table-container td[style*="position: sticky"],
+.data-table th[style*="position: sticky"],
+.data-table td[style*="position: sticky"] {
+  will-change: transform;
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 
 .data-table th {
@@ -619,6 +636,8 @@ select.form-control option {
     left: auto !important;
     right: auto !important;
     box-shadow: none !important;
+    transform: none !important;
+    will-change: auto !important;
   }
 
   /* 3. Mantém apenas o cabeçalho fixo no topo verticalmente para referência */
@@ -628,6 +647,7 @@ select.form-control option {
     top: 0 !important;
     z-index: 5 !important;
     background-color: #0E1524 !important;
+    transform: translateZ(0) !important;
   }
 
   /* 4. Garante rolagem horizontal fluida e nativa com o toque do dedo (touch swipe) */
@@ -635,7 +655,8 @@ select.form-control option {
     -webkit-overflow-scrolling: touch !important;
     overflow-x: auto !important;
     overflow-y: auto !important;
-    touch-action: pan-x pan-y !important;
+    touch-action: auto !important;
+    overscroll-behavior-x: contain !important;
     width: 100% !important;
     max-width: 100% !important;
     max-height: 72vh !important;
@@ -645,7 +666,8 @@ select.form-control option {
   .data-table {
     width: max-content !important;
     min-width: 100% !important;
-    border-collapse: collapse !important;
+    border-collapse: separate !important;
+    border-spacing: 0 !important;
   }
 
   /* 5. Controles de paginação adaptados para telas pequenas de celular */
