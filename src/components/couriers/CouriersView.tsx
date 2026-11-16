@@ -1702,6 +1702,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                 <div 
                   ref={settlementTableContainerRef}
                   onScroll={handleSettlementTableScroll}
+                  className="table-container"
                   style={{ overflowX: 'auto', maxHeight: '460px', overflowY: 'auto' }}
                 >
                   <table className="data-table" style={{ fontSize: '0.82rem', width: 'max-content', minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>

@@ -1,7 +1,8 @@
 import React, { useRef, useState, useEffect } from 'react';
 
 /**
- * Hook to synchronize horizontal scroll between a top scrollbar and table container
+ * Hook to synchronize horizontal scroll between a top scrollbar and table container.
+ * Automatically avoids touch conflicts on mobile devices (<= 768px).
  */
 export function useSyncedHorizontalScroll<T = any>(dependencyData?: T) {
   const topScrollRef = useRef<HTMLDivElement>(null);
@@ -9,8 +10,12 @@ export function useSyncedHorizontalScroll<T = any>(dependencyData?: T) {
   const [scrollWidth, setScrollWidth] = useState<number>(1500);
   const isSyncingRef = useRef<boolean>(false);
 
+  const isMobileScreen = () => {
+    return typeof window !== 'undefined' && window.innerWidth <= 768;
+  };
+
   const handleTopScroll = () => {
-    if (isSyncingRef.current) return;
+    if (isSyncingRef.current || isMobileScreen()) return;
     isSyncingRef.current = true;
     if (tableContainerRef.current && topScrollRef.current) {
       tableContainerRef.current.scrollLeft = topScrollRef.current.scrollLeft;
@@ -21,7 +26,7 @@ export function useSyncedHorizontalScroll<T = any>(dependencyData?: T) {
   };
 
   const handleTableScroll = () => {
-    if (isSyncingRef.current) return;
+    if (isSyncingRef.current || isMobileScreen()) return;
     isSyncingRef.current = true;
     if (topScrollRef.current && tableContainerRef.current) {
       topScrollRef.current.scrollLeft = tableContainerRef.current.scrollLeft;
@@ -66,7 +71,7 @@ export const TableTopScroll: React.FC<TableTopScrollProps> = ({
   label = 'registros'
 }) => {
   return (
-    <>
+    <div className="table-top-scroll-wrapper">
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -103,6 +108,7 @@ export const TableTopScroll: React.FC<TableTopScrollProps> = ({
       >
         <div style={{ width: `${Math.max(scrollWidth, 1200)}px`, height: '1px' }} />
       </div>
-    </>
+    </div>
   );
 };
+

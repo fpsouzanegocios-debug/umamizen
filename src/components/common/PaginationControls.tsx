@@ -44,25 +44,31 @@ export const PaginationControls: React.FC<PaginationControlsProps> = ({
   }
 
   return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      flexWrap: 'wrap',
-      gap: '12px',
-      padding: '12px 16px',
-      backgroundColor: 'var(--bg-card)',
-      borderTop: '1px solid var(--border-color)',
-      borderRadius: '0 0 10px 10px'
-    }}>
+    <div 
+      className="pagination-controls-container"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '12px',
+        padding: '12px 16px',
+        backgroundColor: 'var(--bg-card)',
+        borderTop: '1px solid var(--border-color)',
+        borderRadius: '0 0 10px 10px'
+      }}
+    >
       {/* Items info and items per page selector */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+      <div 
+        className="pagination-controls-info"
+        style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.82rem', color: 'var(--text-secondary)', flexWrap: 'wrap' }}
+      >
         <span>
           Mostrando <strong style={{ color: '#F8FAFC' }}>{startItem}</strong> a <strong style={{ color: '#F8FAFC' }}>{endItem}</strong> de <strong style={{ color: '#F8FAFC' }}>{totalItems}</strong> {totalItems === 1 ? labelSingular : labelPlural}
         </span>
 
         {onItemsPerPageChange && (
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginLeft: '8px' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginLeft: '4px' }}>
             <span style={{ fontSize: '0.78rem' }}>Por pág:</span>
             <select
               value={itemsPerPage}
@@ -89,7 +95,10 @@ export const PaginationControls: React.FC<PaginationControlsProps> = ({
       </div>
 
       {/* Page navigation buttons */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+      <div 
+        className="pagination-controls-buttons"
+        style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}
+      >
         <button
           type="button"
           onClick={() => onPageChange(1)}

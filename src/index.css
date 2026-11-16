@@ -594,4 +594,80 @@ select.form-control option {
   }
 }
 
+/* ==========================================================================
+   TABELAS RESPONSIVAS: AJUSTE PARA DESKTOP VS MODO CELULAR (MOBILE)
+   ========================================================================== */
+
+/* Barra de rolagem superior rápida: visível no Desktop */
+.table-top-scroll-wrapper {
+  display: block;
+}
+
+@media (max-width: 768px) {
+  /* 1. No celular, oculta a barra de rolagem duplicada do topo (economiza espaço e evita conflito de toque) */
+  .table-top-scroll-wrapper {
+    display: none !important;
+  }
+
+  /* 2. No celular, DESATIVA a fixação lateral das colunas (Data, Pedido, Ações)
+        Isso corrige o bug de colunas colidindo e cobrindo a tela no celular */
+  .table-container th,
+  .table-container td,
+  .data-table th,
+  .data-table td {
+    position: static !important;
+    left: auto !important;
+    right: auto !important;
+    box-shadow: none !important;
+  }
+
+  /* 3. Mantém apenas o cabeçalho fixo no topo verticalmente para referência */
+  .table-container thead th,
+  .data-table thead th {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 5 !important;
+    background-color: #0E1524 !important;
+  }
+
+  /* 4. Garante rolagem horizontal fluida e nativa com o toque do dedo (touch swipe) */
+  .table-container {
+    -webkit-overflow-scrolling: touch !important;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    touch-action: pan-x pan-y !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 72vh !important;
+    border-radius: 8px !important;
+  }
+
+  .data-table {
+    width: max-content !important;
+    min-width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  /* 5. Controles de paginação adaptados para telas pequenas de celular */
+  .pagination-controls-container {
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 10px !important;
+    padding: 10px 8px !important;
+  }
+
+  .pagination-controls-info {
+    width: 100% !important;
+    justify-content: space-between !important;
+    font-size: 0.75rem !important;
+  }
+
+  .pagination-controls-buttons {
+    width: 100% !important;
+    justify-content: center !important;
+    gap: 4px !important;
+  }
+}
+
 
