@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Building2, 
   Plus, 
@@ -9,19 +9,21 @@ import {
   Clock, 
   DollarSign, 
   Calendar, 
-  X,
-  AlertCircle,
-  Tag,
-  Check,
-  AlertTriangle,
-  Bell,
-  Repeat
+  X, 
+  AlertCircle, 
+  Tag, 
+  Check, 
+  AlertTriangle, 
+  Bell, 
+  Repeat 
 } from 'lucide-react';
 import { FixedCost, FixedCostPayment, DateRange } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/formatters';
 import { isDateInRange } from '../../lib/dateUtils';
 import { supabase } from '../../lib/supabase';
 import { DateRangePicker } from '../common/DateRangePicker';
+import { PaginationControls } from '../common/PaginationControls';
+import { useSyncedHorizontalScroll, TableTopScroll } from '../common/TableScrollSync';
 import { 
   ResolvedFixedCost, 
   getResolvedFixedCostsForPeriod, 
@@ -237,6 +239,32 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
       dueSoonTotal
     };
   }, [filteredCosts, computedFixedCosts]);
+
+  // Fixed Costs Table Pagination
+  const [costsCurrentPage, setCostsCurrentPage] = useState<number>(1);
+  const [costsPerPage, setCostsPerPage] = useState<number>(15);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setCostsCurrentPage(1);
+  }, [searchQuery, categoryFilter, statusFilter, periodFilter, selectedMonth, selectedYear]);
+
+  const totalCostsCount = filteredCosts.length;
+  const costsTotalPages = Math.max(1, Math.ceil(totalCostsCount / costsPerPage));
+  const safeCostsPage = Math.min(costsCurrentPage, costsTotalPages);
+
+  const paginatedCosts = useMemo(() => {
+    const start = (safeCostsPage - 1) * costsPerPage;
+    return filteredCosts.slice(start, start + costsPerPage);
+  }, [filteredCosts, safeCostsPage, costsPerPage]);
+
+  const {
+    topScrollRef,
+    tableContainerRef,
+    scrollWidth,
+    handleTopScroll,
+    handleTableScroll
+  } = useSyncedHorizontalScroll(paginatedCosts);
 
   // Save / Submit (Create or Edit)
   const handleSave = async (e: React.FormEvent) => {
@@ -598,23 +626,46 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
         </div>
       </div>
 
-      {/* Main Table / List */}
-      <div className="card">
-        <div className="table-container">
-          <table className="data-table">
+      {/* Main Table / List with Synchronized Scroll and Sticky Columns */}
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <TableTopScroll
+          topScrollRef={topScrollRef}
+          onScroll={handleTopScroll}
+          scrollWidth={scrollWidth}
+          currentPage={safeCostsPage}
+          totalPages={costsTotalPages}
+          totalItems={totalCostsCount}
+          label="custos fixos"
+        />
+
+        <div 
+          ref={tableContainerRef}
+          onScroll={handleTableScroll}
+          className="table-container"
+          style={{
+            overflowX: 'auto',
+            overflowY: 'auto',
+            maxHeight: '620px',
+            margin: 0,
+            borderTopLeftRadius: 0,
+            borderTopRightRadius: 0,
+            border: 'none'
+          }}
+        >
+          <table className="data-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
             <thead>
               <tr>
-                <th>Custo Fixo</th>
-                <th>Categoria</th>
-                <th>Vencimento</th>
-                <th>Forma de Pgto</th>
-                <th>Status</th>
-                <th style={{ textAlign: 'right' }}>Valor</th>
-                <th style={{ textAlign: 'center' }}>Ações</th>
+                <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '220px', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>Custo Fixo</th>
+                <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '160px' }}>Categoria</th>
+                <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '120px' }}>Vencimento</th>
+                <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '140px' }}>Forma de Pgto</th>
+                <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '120px' }}>Status</th>
+                <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '130px', textAlign: 'right' }}>Valor</th>
+                <th style={{ position: 'sticky', top: 0, right: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '110px', textAlign: 'center', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)' }}>Ações</th>
               </tr>
             </thead>
             <tbody>
-              {filteredCosts.length === 0 ? (
+              {paginatedCosts.length === 0 ? (
                 <tr>
                   <td colSpan={7} style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--text-secondary)' }}>
                     <Building2 size={36} style={{ opacity: 0.3, marginBottom: '8px' }} />
@@ -622,9 +673,9 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredCosts.map((item) => (
+                paginatedCosts.map((item) => (
                   <tr key={item.id}>
-                    <td>
+                    <td style={{ position: 'sticky', left: 0, zIndex: 10, backgroundColor: '#0F172A', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <span style={{ fontWeight: 600, color: '#F8FAFC', fontSize: '0.95rem' }}>
@@ -742,7 +793,7 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
                       </span>
                     </td>
 
-                    <td>
+                    <td style={{ position: 'sticky', right: 0, zIndex: 10, backgroundColor: '#0F172A', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)', textAlign: 'center' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                         <button
                           onClick={() => handleOpenEdit(item)}
@@ -783,6 +834,19 @@ export const FixedCostsView: React.FC<FixedCostsViewProps> = ({
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Controls */}
+        <PaginationControls
+          currentPage={safeCostsPage}
+          totalItems={totalCostsCount}
+          itemsPerPage={costsPerPage}
+          onPageChange={setCostsCurrentPage}
+          onItemsPerPageChange={setCostsPerPage}
+          pageSizeOptions={[10, 15, 25, 50, 100]}
+          labelSingular="custo fixo"
+          labelPlural="custos fixos"
+          themeColor="#F43F5E"
+        />
       </div>
 
       {/* Modal Criar / Editar Custo Fixo (Padrão do Sistema) */}

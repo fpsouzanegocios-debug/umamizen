@@ -19,6 +19,8 @@ import { formatCurrency, formatDate } from '../../lib/formatters';
 import { isDateInRange } from '../../lib/dateUtils';
 import { supabase } from '../../lib/supabase';
 import { DateRangePicker } from '../common/DateRangePicker';
+import { PaginationControls } from '../common/PaginationControls';
+import { useSyncedHorizontalScroll, TableTopScroll } from '../common/TableScrollSync';
 
 interface InvestmentsViewProps {
   investments: Investment[];
@@ -120,6 +122,32 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
 
     return { monthTotal, yearTotal, paidTotal, pendingTotal, byCat };
   }, [filteredInvestments, localInvestments, selectedYear, selectedCategory]);
+
+  // Investments Table Pagination
+  const [investmentsCurrentPage, setInvestmentsCurrentPage] = useState<number>(1);
+  const [investmentsPerPage, setInvestmentsPerPage] = useState<number>(15);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setInvestmentsCurrentPage(1);
+  }, [dateRange, selectedMonth, selectedYear, selectedCategory]);
+
+  const totalInvestmentsCount = filteredInvestments.length;
+  const investmentsTotalPages = Math.max(1, Math.ceil(totalInvestmentsCount / investmentsPerPage));
+  const safeInvestmentsPage = Math.min(investmentsCurrentPage, investmentsTotalPages);
+
+  const paginatedInvestments = useMemo(() => {
+    const start = (safeInvestmentsPage - 1) * investmentsPerPage;
+    return filteredInvestments.slice(start, start + investmentsPerPage);
+  }, [filteredInvestments, safeInvestmentsPage, investmentsPerPage]);
+
+  const {
+    topScrollRef,
+    tableContainerRef,
+    scrollWidth,
+    handleTopScroll,
+    handleTableScroll
+  } = useSyncedHorizontalScroll(paginatedInvestments);
 
   const handleCreateInvestment = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -390,35 +418,58 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
         </div>
       )}
 
-      {/* Table */}
-      <div className="table-container">
-        <table className="data-table">
+      {/* Investments Table with Synchronized Scroll and Sticky Columns */}
+      <TableTopScroll
+        topScrollRef={topScrollRef}
+        onScroll={handleTopScroll}
+        scrollWidth={scrollWidth}
+        currentPage={safeInvestmentsPage}
+        totalPages={investmentsTotalPages}
+        totalItems={totalInvestmentsCount}
+        label="investimentos"
+      />
+
+      <div 
+        ref={tableContainerRef}
+        onScroll={handleTableScroll}
+        className="table-container"
+        style={{
+          overflowX: 'auto',
+          overflowY: 'auto',
+          maxHeight: '620px',
+          marginTop: 0,
+          borderTopLeftRadius: 0,
+          borderTopRightRadius: 0,
+          border: '1px solid rgba(255, 255, 255, 0.08)'
+        }}
+      >
+        <table className="data-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
           <thead>
             <tr>
-              <th>Data</th>
-              <th>Categoria</th>
-              <th>Descrição</th>
-              <th>Fornecedor</th>
-              <th>Parcela</th>
-              <th>Valor</th>
-              <th>Status</th>
-              <th>Data Pagamento</th>
-              <th>Observação</th>
-              <th>Ações</th>
+              <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '110px' }}>Data</th>
+              <th style={{ position: 'sticky', top: 0, left: '110px', zIndex: 25, backgroundColor: '#0F172A', minWidth: '150px', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>Categoria</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '200px' }}>Descrição</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '150px' }}>Fornecedor</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '95px' }}>Parcela</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '130px' }}>Valor</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '110px' }}>Status</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '130px' }}>Data Pagamento</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '180px' }}>Observação</th>
+              <th style={{ position: 'sticky', top: 0, right: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '140px', textAlign: 'center', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)' }}>Ações</th>
             </tr>
           </thead>
           <tbody>
-            {filteredInvestments.length === 0 ? (
+            {paginatedInvestments.length === 0 ? (
               <tr>
                 <td colSpan={10} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                   Nenhum investimento registrado para este mês.
                 </td>
               </tr>
             ) : (
-              filteredInvestments.map((inv) => (
+              paginatedInvestments.map((inv) => (
                 <tr key={inv.id}>
-                  <td style={{ fontWeight: 600 }}>{formatDate(inv.investment_date)}</td>
-                  <td>
+                  <td style={{ position: 'sticky', left: 0, zIndex: 10, backgroundColor: '#0F172A', fontWeight: 600 }}>{formatDate(inv.investment_date)}</td>
+                  <td style={{ position: 'sticky', left: '110px', zIndex: 10, backgroundColor: '#0F172A', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>
                     <span className="badge badge-neutral">{inv.category}</span>
                   </td>
                   <td style={{ fontWeight: 600, color: '#F8FAFC' }}>{inv.description}</td>
@@ -436,8 +487,8 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
                   <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {inv.notes || '-'}
                   </td>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <td style={{ position: 'sticky', right: 0, zIndex: 10, backgroundColor: '#0F172A', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)', textAlign: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
                       <button
                         onClick={() => handleToggleStatus(inv)}
                         className={`btn btn-sm ${inv.status === 'paid' ? 'btn-secondary' : 'btn-primary'}`}
@@ -475,6 +526,19 @@ export const InvestmentsView: React.FC<InvestmentsViewProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination Controls */}
+      <PaginationControls
+        currentPage={safeInvestmentsPage}
+        totalItems={totalInvestmentsCount}
+        itemsPerPage={investmentsPerPage}
+        onPageChange={setInvestmentsCurrentPage}
+        onItemsPerPageChange={setInvestmentsPerPage}
+        pageSizeOptions={[10, 15, 25, 50, 100]}
+        labelSingular="investimento"
+        labelPlural="investimentos"
+        themeColor="#F43F5E"
+      />
 
       {/* New Investment Modal */}
       {(showModal || isCreateModalOpen) && (

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Search, 
   Filter, 
@@ -31,6 +31,8 @@ import { OrderEditModal } from './OrderEditModal';
 import { OrderCreateModal } from './OrderCreateModal';
 import { OrderHistoryModal } from './OrderHistoryModal';
 import { DateRangePicker } from '../common/DateRangePicker';
+import { PaginationControls } from '../common/PaginationControls';
+import { useSyncedHorizontalScroll, TableTopScroll } from '../common/TableScrollSync';
 
 interface OrdersViewProps {
   orders: Order[];
@@ -213,6 +215,32 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
 
     return { count, gross, platformFees, cardFees, adjustments, net, avgTicket };
   }, [filteredOrders]);
+
+  // Orders Table Pagination
+  const [ordersCurrentPage, setOrdersCurrentPage] = useState<number>(1);
+  const [ordersPerPage, setOrdersPerPage] = useState<number>(15);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setOrdersCurrentPage(1);
+  }, [searchTerm, channelFilter, paymentFilter, statusFilter, courierFilter, pendingOnly, periodFilter, dateRange, selectedMonth, selectedYear]);
+
+  const totalOrdersCount = filteredOrders.length;
+  const ordersTotalPages = Math.max(1, Math.ceil(totalOrdersCount / ordersPerPage));
+  const safeOrdersPage = Math.min(ordersCurrentPage, ordersTotalPages);
+
+  const paginatedOrders = useMemo(() => {
+    const start = (safeOrdersPage - 1) * ordersPerPage;
+    return filteredOrders.slice(start, start + ordersPerPage);
+  }, [filteredOrders, safeOrdersPage, ordersPerPage]);
+
+  const {
+    topScrollRef,
+    tableContainerRef,
+    scrollWidth,
+    handleTopScroll,
+    handleTableScroll
+  } = useSyncedHorizontalScroll(paginatedOrders);
 
   return (
     <div className="page-container">
@@ -470,49 +498,72 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
         </div>
       </div>
 
-      {/* Orders Table */}
-      <div className="table-container">
-        <table className="data-table">
+      {/* Orders Table with Synchronized Scroll and Sticky Columns */}
+      <TableTopScroll
+        topScrollRef={topScrollRef}
+        onScroll={handleTopScroll}
+        scrollWidth={scrollWidth}
+        currentPage={safeOrdersPage}
+        totalPages={ordersTotalPages}
+        totalItems={totalOrdersCount}
+        label="pedidos"
+      />
+
+      <div 
+        ref={tableContainerRef}
+        onScroll={handleTableScroll}
+        className="table-container"
+        style={{
+          overflowX: 'auto',
+          overflowY: 'auto',
+          maxHeight: '620px',
+          marginTop: 0,
+          borderTopLeftRadius: 0,
+          borderTopRightRadius: 0,
+          border: '1px solid rgba(255, 255, 255, 0.08)'
+        }}
+      >
+        <table className="data-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
           <thead>
             <tr>
-              <th>Data</th>
-              <th>Nº Pedido</th>
-              <th>Id Ext.</th>
-              <th>Cliente</th>
-              <th>Plataforma</th>
-              <th>Pagamento</th>
-              <th>Bruto</th>
-              <th>Tx Entrega</th>
-              <th>Tx Plataforma</th>
-              <th>Tx Maquineta</th>
-              <th>Ajustes / Promo</th>
-              <th>Líquido</th>
-              <th>Bairro</th>
-              <th>Motoboy</th>
-              <th>Status</th>
-              <th>Pendência</th>
-              <th>Ações</th>
+              <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '120px' }}>Data</th>
+              <th style={{ position: 'sticky', top: 0, left: '120px', zIndex: 25, backgroundColor: '#0F172A', minWidth: '100px', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>Nº Pedido</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '95px' }}>Id Ext.</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '160px' }}>Cliente</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '110px' }}>Plataforma</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '135px' }}>Pagamento</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '100px' }}>Bruto</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '110px' }}>Tx Entrega</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '100px' }}>Tx Plataforma</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '100px' }}>Tx Maquineta</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '130px' }}>Ajustes / Promo</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '105px' }}>Líquido</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '150px' }}>Bairro</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '115px' }}>Motoboy</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '100px' }}>Status</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '125px' }}>Pendência</th>
+              <th style={{ position: 'sticky', top: 0, right: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '115px', textAlign: 'center', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)' }}>Ações</th>
             </tr>
           </thead>
           <tbody>
-            {filteredOrders.length === 0 ? (
+            {paginatedOrders.length === 0 ? (
               <tr>
                 <td colSpan={17} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                   Nenhum pedido encontrado com os filtros atuais.
                 </td>
               </tr>
             ) : (
-              filteredOrders.map((o) => {
+              paginatedOrders.map((o) => {
                 const finalPay = o.final_payment_method || o.original_payment_method;
                 const isEdited = o.is_manually_edited;
 
                 return (
                   <tr key={o.id} style={{ opacity: o.is_canceled ? 0.65 : 1 }}>
-                    <td style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                    <td style={{ position: 'sticky', left: 0, zIndex: 10, backgroundColor: '#0F172A', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                       {formatDateTime(o.order_date)}
                     </td>
 
-                    <td style={{ fontWeight: 700, color: '#F8FAFC' }}>
+                    <td style={{ position: 'sticky', left: '120px', zIndex: 10, backgroundColor: '#0F172A', fontWeight: 700, color: '#F8FAFC', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>
                       #{o.order_number}
                     </td>
 
@@ -656,8 +707,8 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                       )}
                     </td>
 
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <td style={{ position: 'sticky', right: 0, zIndex: 10, backgroundColor: '#0F172A', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)', textAlign: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
                         <button
                           onClick={() => setEditingOrder(o)}
                           className="btn btn-secondary btn-sm"
@@ -692,6 +743,19 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination Controls */}
+      <PaginationControls
+        currentPage={safeOrdersPage}
+        totalItems={totalOrdersCount}
+        itemsPerPage={ordersPerPage}
+        onPageChange={setOrdersCurrentPage}
+        onItemsPerPageChange={setOrdersPerPage}
+        pageSizeOptions={[10, 15, 25, 50, 100]}
+        labelSingular="pedido"
+        labelPlural="pedidos"
+        themeColor="#F43F5E"
+      />
 
       {/* Create Modal */}
       {showCreateModal && (

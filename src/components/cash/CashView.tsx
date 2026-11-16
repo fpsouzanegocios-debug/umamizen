@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Wallet, 
   ArrowUpRight, 
@@ -8,15 +8,17 @@ import {
   Tag, 
   Trash2, 
   Layers, 
-  Settings,
-  X,
-  Edit3
+  Settings, 
+  X, 
+  Edit3 
 } from 'lucide-react';
 import { CashTransaction, CashInitialBalance, DateRange } from '../../types';
 import { formatCurrency, formatDate } from '../../lib/formatters';
 import { isDateInRange } from '../../lib/dateUtils';
 import { supabase } from '../../lib/supabase';
 import { DateRangePicker } from '../common/DateRangePicker';
+import { PaginationControls } from '../common/PaginationControls';
+import { useSyncedHorizontalScroll, TableTopScroll } from '../common/TableScrollSync';
 
 interface CashViewProps {
   transactions: CashTransaction[];
@@ -145,6 +147,32 @@ export const CashView: React.FC<CashViewProps> = ({
       byCategory
     };
   }, [filteredTransactions, latestInitialBalance]);
+
+  // Cash Outflows Table Pagination
+  const [cashCurrentPage, setCashCurrentPage] = useState<number>(1);
+  const [cashPerPage, setCashPerPage] = useState<number>(15);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setCashCurrentPage(1);
+  }, [dateRange, selectedMonth, selectedYear]);
+
+  const totalCashCount = filteredTransactions.length;
+  const cashTotalPages = Math.max(1, Math.ceil(totalCashCount / cashPerPage));
+  const safeCashPage = Math.min(cashCurrentPage, cashTotalPages);
+
+  const paginatedTransactions = useMemo(() => {
+    const start = (safeCashPage - 1) * cashPerPage;
+    return filteredTransactions.slice(start, start + cashPerPage);
+  }, [filteredTransactions, safeCashPage, cashPerPage]);
+
+  const {
+    topScrollRef,
+    tableContainerRef,
+    scrollWidth,
+    handleTopScroll,
+    handleTableScroll
+  } = useSyncedHorizontalScroll(paginatedTransactions);
 
   const handleCreateTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -372,33 +400,56 @@ export const CashView: React.FC<CashViewProps> = ({
         </div>
       )}
 
-      {/* Transactions Table (Somente Saídas) */}
-      <div className="table-container">
-        <table className="data-table">
+      {/* Transactions Table with Synchronized Scroll and Sticky Columns */}
+      <TableTopScroll
+        topScrollRef={topScrollRef}
+        onScroll={handleTopScroll}
+        scrollWidth={scrollWidth}
+        currentPage={safeCashPage}
+        totalPages={cashTotalPages}
+        totalItems={totalCashCount}
+        label="saídas"
+      />
+
+      <div 
+        ref={tableContainerRef}
+        onScroll={handleTableScroll}
+        className="table-container"
+        style={{
+          overflowX: 'auto',
+          overflowY: 'auto',
+          maxHeight: '620px',
+          marginTop: 0,
+          borderTopLeftRadius: 0,
+          borderTopRightRadius: 0,
+          border: '1px solid rgba(255, 255, 255, 0.08)'
+        }}
+      >
+        <table className="data-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
           <thead>
             <tr>
-              <th>Data</th>
-              <th>Categoria</th>
-              <th>Descrição</th>
-              <th>Valor da Saída</th>
-              <th>Forma Pagamento</th>
-              <th>Origem</th>
-              <th>Observação</th>
-              <th style={{ textAlign: 'center' }}>Ações</th>
+              <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '110px' }}>Data</th>
+              <th style={{ position: 'sticky', top: 0, left: '110px', zIndex: 25, backgroundColor: '#0F172A', minWidth: '150px', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>Categoria</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '200px' }}>Descrição</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '130px' }}>Valor da Saída</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '130px' }}>Forma Pagamento</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '130px' }}>Origem</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '180px' }}>Observação</th>
+              <th style={{ position: 'sticky', top: 0, right: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '110px', textAlign: 'center', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)' }}>Ações</th>
             </tr>
           </thead>
           <tbody>
-            {filteredTransactions.length === 0 ? (
+            {paginatedTransactions.length === 0 ? (
               <tr>
                 <td colSpan={8} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                   Nenhuma saída de caixa registrada neste período.
                 </td>
               </tr>
             ) : (
-              filteredTransactions.map((t) => (
+              paginatedTransactions.map((t) => (
                 <tr key={t.id}>
-                  <td style={{ fontWeight: 600 }}>{formatDate(t.transaction_date)}</td>
-                  <td>
+                  <td style={{ position: 'sticky', left: 0, zIndex: 10, backgroundColor: '#0F172A', fontWeight: 600 }}>{formatDate(t.transaction_date)}</td>
+                  <td style={{ position: 'sticky', left: '110px', zIndex: 10, backgroundColor: '#0F172A', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>
                     <span className="badge badge-neutral">{t.category}</span>
                   </td>
                   <td style={{ fontWeight: 600, color: '#F8FAFC' }}>{t.description}</td>
@@ -417,7 +468,7 @@ export const CashView: React.FC<CashViewProps> = ({
                   <td style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {t.notes || '-'}
                   </td>
-                  <td style={{ textAlign: 'center' }}>
+                  <td style={{ position: 'sticky', right: 0, zIndex: 10, backgroundColor: '#0F172A', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)', textAlign: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
                       <button
                         type="button"
@@ -445,6 +496,19 @@ export const CashView: React.FC<CashViewProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination Controls */}
+      <PaginationControls
+        currentPage={safeCashPage}
+        totalItems={totalCashCount}
+        itemsPerPage={cashPerPage}
+        onPageChange={setCashCurrentPage}
+        onItemsPerPageChange={setCashPerPage}
+        pageSizeOptions={[10, 15, 25, 50, 100]}
+        labelSingular="saída de caixa"
+        labelPlural="saídas de caixa"
+        themeColor="#F43F5E"
+      />
 
       {/* New Outflow Modal */}
       {(showModal || isCreateModalOpen) && (

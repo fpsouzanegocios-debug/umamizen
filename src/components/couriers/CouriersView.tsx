@@ -38,6 +38,8 @@ import { ReconciliationDetailModal, ReconciliationModalType, ReconciliationItem 
 import { CourierAdjustmentsModal } from './CourierAdjustmentsModal';
 import { CourierBatchPaymentModal } from './CourierBatchPaymentModal';
 import { Smartphone, Key, Send, Copy, ExternalLink, CheckCircle2, EyeOff, ClipboardCheck, FileCheck, FileText } from 'lucide-react';
+import { PaginationControls } from '../common/PaginationControls';
+import { useSyncedHorizontalScroll, TableTopScroll } from '../common/TableScrollSync';
 
 interface CouriersViewProps {
   couriers: Courier[];
@@ -632,6 +634,31 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       selectedSettlementKeys.has(`${item.dateStr}_${item.courierName.toLowerCase()}`)
     );
   }, [displayedSettlements, selectedSettlementKeys]);
+
+  // Daily Settlements Table Pagination & Synced Scroll
+  const [settlementsCurrentPage, setSettlementsCurrentPage] = useState<number>(1);
+  const [settlementsPerPage, setSettlementsPerPage] = useState<number>(15);
+
+  useEffect(() => {
+    setSettlementsCurrentPage(1);
+  }, [settlementFilter, selectedCourierName, selectedMonth, selectedYear, dateRange]);
+
+  const totalSettlementsCount = displayedSettlements.length;
+  const settlementsTotalPages = Math.max(1, Math.ceil(totalSettlementsCount / settlementsPerPage));
+  const safeSettlementsPage = Math.min(settlementsCurrentPage, settlementsTotalPages);
+
+  const paginatedSettlements = useMemo(() => {
+    const start = (safeSettlementsPage - 1) * settlementsPerPage;
+    return displayedSettlements.slice(start, start + settlementsPerPage);
+  }, [displayedSettlements, safeSettlementsPage, settlementsPerPage]);
+
+  const {
+    topScrollRef: settlementTopScrollRef,
+    tableContainerRef: settlementTableContainerRef,
+    scrollWidth: settlementScrollWidth,
+    handleTopScroll: handleSettlementTopScroll,
+    handleTableScroll: handleSettlementTableScroll
+  } = useSyncedHorizontalScroll(paginatedSettlements);
 
   // Reconciliation Cash / Card breakdown (Section 15)
   // Cross deliveries with orders to find what was paid directly in physical money or POS card machine
@@ -1660,36 +1687,51 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                 Nenhum acerto de diária para o filtro selecionado ({settlementFilter === 'pending' ? 'sem pendências' : settlementFilter === 'paid' ? 'nenhum pago' : 'vazio'}).
               </div>
             ) : settlementViewMode === 'table' ? (
-              /* Compact Table Mode */
-              <div style={{ overflowX: 'auto', maxHeight: '440px', overflowY: 'auto' }}>
-                <table className="data-table" style={{ fontSize: '0.82rem' }}>
-                  <thead>
-                    <tr>
-                      <th style={{ width: '38px', textAlign: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={displayedSettlements.length > 0 && selectedSettlementKeys.size === displayedSettlements.length}
-                          onChange={toggleSelectAllSettlements}
-                          title={selectedSettlementKeys.size === displayedSettlements.length ? 'Desmarcar todos' : 'Selecionar todos'}
-                          style={{ cursor: 'pointer', width: '15px', height: '15px' }}
-                        />
-                      </th>
-                      <th>Data</th>
-                      <th>Motoboy</th>
-                      <th>Corridas</th>
-                      <th>Base (R$ 8)</th>
-                      <th>Adicionais</th>
-                      <th>Total Diária (Bruto)</th>
-                      <th>Dinheiro c/ Motoboy</th>
-                      <th>Líquido a Pagar</th>
-                      <th style={{ textAlign: 'center' }}>Conferência</th>
-                      <th>Status</th>
-                      <th>Forma Pgto</th>
-                      <th style={{ textAlign: 'right' }}>Ação</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {displayedSettlements.map((item) => {
+              /* Compact Table Mode with Synced Scroll and Sticky Columns */
+              <div>
+                <TableTopScroll
+                  topScrollRef={settlementTopScrollRef}
+                  onScroll={handleSettlementTopScroll}
+                  scrollWidth={settlementScrollWidth}
+                  currentPage={safeSettlementsPage}
+                  totalPages={settlementsTotalPages}
+                  totalItems={totalSettlementsCount}
+                  label="diárias"
+                />
+
+                <div 
+                  ref={settlementTableContainerRef}
+                  onScroll={handleSettlementTableScroll}
+                  style={{ overflowX: 'auto', maxHeight: '460px', overflowY: 'auto' }}
+                >
+                  <table className="data-table" style={{ fontSize: '0.82rem', width: 'max-content', minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 25, backgroundColor: '#0F172A', width: '38px', textAlign: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={displayedSettlements.length > 0 && selectedSettlementKeys.size === displayedSettlements.length}
+                            onChange={toggleSelectAllSettlements}
+                            title={selectedSettlementKeys.size === displayedSettlements.length ? 'Desmarcar todos' : 'Selecionar todos'}
+                            style={{ cursor: 'pointer', width: '15px', height: '15px' }}
+                          />
+                        </th>
+                        <th style={{ position: 'sticky', top: 0, left: '38px', zIndex: 25, backgroundColor: '#0F172A', minWidth: '95px' }}>Data</th>
+                        <th style={{ position: 'sticky', top: 0, left: '133px', zIndex: 25, backgroundColor: '#0F172A', minWidth: '110px', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>Motoboy</th>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '85px' }}>Corridas</th>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '95px' }}>Base (R$ 8)</th>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '95px' }}>Adicionais</th>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '125px' }}>Total Diária (Bruto)</th>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '135px' }}>Dinheiro c/ Motoboy</th>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '120px' }}>Líquido a Pagar</th>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '110px', textAlign: 'center' }}>Conferência</th>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '95px' }}>Status</th>
+                        <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '95px' }}>Forma Pgto</th>
+                        <th style={{ position: 'sticky', top: 0, right: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '140px', textAlign: 'right', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)' }}>Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedSettlements.map((item) => {
                       const isPaid = item.isPaid;
                       const formattedDate = item.dateStr.split('-').reverse().join('/');
                       const itemKey = `${item.dateStr}_${item.courierName.toLowerCase()}`;
@@ -1703,23 +1745,23 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                             transition: 'background-color 0.15s ease'
                           }}
                         >
-                          <td style={{ textAlign: 'center' }}>
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => toggleSelectSettlement(itemKey)}
-                              style={{ cursor: 'pointer', width: '15px', height: '15px' }}
-                            />
-                          </td>
-                          <td style={{ fontWeight: 700, color: '#F8FAFC' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <Calendar size={13} color="var(--text-muted)" />
-                              <span>{formattedDate}</span>
-                            </div>
-                          </td>
-                          <td style={{ fontWeight: 600, color: '#38BDF8' }}>
-                            {item.courierName}
-                          </td>
+                            <td style={{ position: 'sticky', left: 0, zIndex: 10, backgroundColor: '#0F172A', textAlign: 'center' }}>
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleSelectSettlement(itemKey)}
+                                style={{ cursor: 'pointer', width: '15px', height: '15px' }}
+                              />
+                            </td>
+                            <td style={{ position: 'sticky', left: '38px', zIndex: 10, backgroundColor: '#0F172A', fontWeight: 700, color: '#F8FAFC' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <Calendar size={13} color="var(--text-muted)" />
+                                <span>{formattedDate}</span>
+                              </div>
+                            </td>
+                            <td style={{ position: 'sticky', left: '133px', zIndex: 10, backgroundColor: '#0F172A', fontWeight: 600, color: '#38BDF8', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>
+                              {item.courierName}
+                            </td>
                           <td>{item.totalDeliveries}</td>
                           <td style={{ color: 'var(--text-secondary)' }}>
                             {formatCurrency(item.baseTotal)}
@@ -1902,7 +1944,7 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                           <td style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                             {isPaid ? (item.payment?.payment_method || 'Pix') : '-'}
                           </td>
-                          <td style={{ textAlign: 'right' }}>
+                          <td style={{ position: 'sticky', right: 0, zIndex: 10, backgroundColor: '#0F172A', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)', textAlign: 'right' }}>
                             <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                               {item.conferenceRecord && (
                                 <button
@@ -1986,6 +2028,20 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                   </tfoot>
                 </table>
               </div>
+
+              {/* Settlements Table Pagination */}
+              <PaginationControls
+                currentPage={safeSettlementsPage}
+                totalItems={totalSettlementsCount}
+                itemsPerPage={settlementsPerPage}
+                onPageChange={setSettlementsCurrentPage}
+                onItemsPerPageChange={setSettlementsPerPage}
+                pageSizeOptions={[10, 15, 25, 50]}
+                labelSingular="diária"
+                labelPlural="diárias apuradas"
+                themeColor="#10B981"
+              />
+            </div>
             ) : (
               /* Cards Mode */
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px', maxHeight: '550px', overflowY: 'auto', paddingRight: '4px' }}>
@@ -2443,113 +2499,17 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       </div>
 
       {/* Deliveries Table Bottom Pagination Controls */}
-      {totalDeliveriesCount > deliveriesPerPage && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '12px',
-          marginTop: '12px',
-          padding: '12px 16px',
-          backgroundColor: '#1E293B',
-          borderRadius: '12px',
-          border: '1px solid rgba(255, 255, 255, 0.08)'
-        }}>
-          <div style={{ fontSize: '0.82rem', color: '#94A3B8' }}>
-            Mostrando <strong style={{ color: '#F8FAFC' }}>{(safeDeliveriesPage - 1) * deliveriesPerPage + 1}–{Math.min(safeDeliveriesPage * deliveriesPerPage, totalDeliveriesCount)}</strong> de <strong style={{ color: '#F8FAFC' }}>{totalDeliveriesCount}</strong> corridas
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              onClick={() => setDeliveriesCurrentPage(1)}
-              disabled={safeDeliveriesPage <= 1}
-              className="btn btn-secondary btn-sm"
-              style={{ padding: '6px 10px', fontSize: '0.78rem', opacity: safeDeliveriesPage <= 1 ? 0.4 : 1 }}
-              title="Primeira página"
-            >
-              « Primeira
-            </button>
-            <button
-              type="button"
-              onClick={() => setDeliveriesCurrentPage(p => Math.max(1, p - 1))}
-              disabled={safeDeliveriesPage <= 1}
-              className="btn btn-secondary btn-sm"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '6px 10px', fontSize: '0.78rem', opacity: safeDeliveriesPage <= 1 ? 0.4 : 1 }}
-            >
-              <ChevronLeft size={14} />
-              <span>Anterior</span>
-            </button>
-
-            {/* Page number buttons */}
-            {(() => {
-              const pages: (number | string)[] = [];
-              if (deliveriesTotalPages <= 7) {
-                for (let i = 1; i <= deliveriesTotalPages; i++) pages.push(i);
-              } else {
-                if (safeDeliveriesPage <= 3) {
-                  pages.push(1, 2, 3, 4, '...', deliveriesTotalPages);
-                } else if (safeDeliveriesPage >= deliveriesTotalPages - 2) {
-                  pages.push(1, '...', deliveriesTotalPages - 3, deliveriesTotalPages - 2, deliveriesTotalPages - 1, deliveriesTotalPages);
-                } else {
-                  pages.push(1, '...', safeDeliveriesPage - 1, safeDeliveriesPage, safeDeliveriesPage + 1, '...', deliveriesTotalPages);
-                }
-              }
-              return pages.map((page, idx) => {
-                if (page === '...') {
-                  return <span key={`dots-${idx}`} style={{ padding: '0 4px', color: '#64748B' }}>...</span>;
-                }
-                const pageNum = Number(page);
-                const isActive = pageNum === safeDeliveriesPage;
-                return (
-                  <button
-                    key={`p-${pageNum}-${idx}`}
-                    type="button"
-                    onClick={() => setDeliveriesCurrentPage(pageNum)}
-                    style={{
-                      minWidth: '32px',
-                      height: '32px',
-                      padding: '0 6px',
-                      borderRadius: '8px',
-                      backgroundColor: isActive ? '#F43F5E' : 'rgba(255, 255, 255, 0.05)',
-                      border: isActive ? '1px solid #F43F5E' : '1px solid rgba(255, 255, 255, 0.1)',
-                      color: isActive ? '#FFFFFF' : '#CBD5E1',
-                      fontSize: '0.8rem',
-                      fontWeight: isActive ? 700 : 500,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease'
-                    }}
-                  >
-                    {pageNum}
-                  </button>
-                );
-              });
-            })()}
-
-            <button
-              type="button"
-              onClick={() => setDeliveriesCurrentPage(p => Math.min(deliveriesTotalPages, p + 1))}
-              disabled={safeDeliveriesPage >= deliveriesTotalPages}
-              className="btn btn-secondary btn-sm"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '6px 10px', fontSize: '0.78rem', opacity: safeDeliveriesPage >= deliveriesTotalPages ? 0.4 : 1 }}
-            >
-              <span>Próxima</span>
-              <ChevronRight size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setDeliveriesCurrentPage(deliveriesTotalPages)}
-              disabled={safeDeliveriesPage >= deliveriesTotalPages}
-              className="btn btn-secondary btn-sm"
-              style={{ padding: '6px 10px', fontSize: '0.78rem', opacity: safeDeliveriesPage >= deliveriesTotalPages ? 0.4 : 1 }}
-              title="Última página"
-            >
-              Última »
-            </button>
-          </div>
-        </div>
-      )}
+      <PaginationControls
+        currentPage={safeDeliveriesPage}
+        totalItems={totalDeliveriesCount}
+        itemsPerPage={deliveriesPerPage}
+        onPageChange={setDeliveriesCurrentPage}
+        onItemsPerPageChange={setDeliveriesPerPage}
+        pageSizeOptions={[10, 15, 25, 50, 100]}
+        labelSingular="corrida"
+        labelPlural="corridas"
+        themeColor="#F43F5E"
+      />
 
       {/* Add Courier Modal */}
       {showAddModal && (

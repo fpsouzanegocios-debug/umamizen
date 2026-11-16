@@ -26,6 +26,8 @@ import { formatCurrency, formatDate } from '../../lib/formatters';
 import { isDateInRange } from '../../lib/dateUtils';
 import { supabase } from '../../lib/supabase';
 import { DateRangePicker } from '../common/DateRangePicker';
+import { PaginationControls } from '../common/PaginationControls';
+import { useSyncedHorizontalScroll, TableTopScroll } from '../common/TableScrollSync';
 
 const PAYABLE_CATEGORIES = [
   'Insumos (Geral)',
@@ -261,6 +263,32 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
       return true;
     });
   }, [computedPayables, periodFilter, dateRange, statusFilter, categoryFilter]);
+
+  // Payables Table Pagination
+  const [payablesCurrentPage, setPayablesCurrentPage] = useState<number>(1);
+  const [payablesPerPage, setPayablesPerPage] = useState<number>(15);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setPayablesCurrentPage(1);
+  }, [statusFilter, categoryFilter, periodFilter, dateRange, selectedMonth, selectedYear]);
+
+  const totalPayablesCount = filteredPayables.length;
+  const payablesTotalPages = Math.max(1, Math.ceil(totalPayablesCount / payablesPerPage));
+  const safePayablesPage = Math.min(payablesCurrentPage, payablesTotalPages);
+
+  const paginatedPayables = useMemo(() => {
+    const start = (safePayablesPage - 1) * payablesPerPage;
+    return filteredPayables.slice(start, start + payablesPerPage);
+  }, [filteredPayables, safePayablesPage, payablesPerPage]);
+
+  const {
+    topScrollRef,
+    tableContainerRef,
+    scrollWidth,
+    handleTopScroll,
+    handleTableScroll
+  } = useSyncedHorizontalScroll(paginatedPayables);
 
   // --- CONTROLE DE ORÇAMENTO / TETO DE INSUMOS (35% DA META) ---
   const currentGoalObj = useMemo(() => {
@@ -930,32 +958,55 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
         </div>
       )}
 
-      {/* Payables Table */}
-      <div className="table-container">
-        <table className="data-table">
+      {/* Payables Table with Synchronized Scroll and Sticky Columns */}
+      <TableTopScroll
+        topScrollRef={topScrollRef}
+        onScroll={handleTopScroll}
+        scrollWidth={scrollWidth}
+        currentPage={safePayablesPage}
+        totalPages={payablesTotalPages}
+        totalItems={totalPayablesCount}
+        label="contas"
+      />
+
+      <div 
+        ref={tableContainerRef}
+        onScroll={handleTableScroll}
+        className="table-container"
+        style={{
+          overflowX: 'auto',
+          overflowY: 'auto',
+          maxHeight: '620px',
+          marginTop: 0,
+          borderTopLeftRadius: 0,
+          borderTopRightRadius: 0,
+          border: '1px solid rgba(255, 255, 255, 0.08)'
+        }}
+      >
+        <table className="data-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
           <thead>
             <tr>
-              <th>Vencimento</th>
-              <th>Fornecedor</th>
-              <th>Descrição</th>
-              <th>Parcela</th>
-              <th>Categoria</th>
-              <th>Valor</th>
-              <th>Status</th>
-              <th>Forma Pag.</th>
-              <th>Data Pagamento</th>
-              <th style={{ minWidth: '150px' }}>Ações</th>
+              <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '110px' }}>Vencimento</th>
+              <th style={{ position: 'sticky', top: 0, left: '110px', zIndex: 25, backgroundColor: '#0F172A', minWidth: '160px', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>Fornecedor</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '200px' }}>Descrição</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '90px' }}>Parcela</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '140px' }}>Categoria</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '130px' }}>Valor</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '110px' }}>Status</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '130px' }}>Forma Pag.</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '120px' }}>Data Pagamento</th>
+              <th style={{ position: 'sticky', top: 0, right: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '160px', textAlign: 'center', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)' }}>Ações</th>
             </tr>
           </thead>
           <tbody>
-            {filteredPayables.length === 0 ? (
+            {paginatedPayables.length === 0 ? (
               <tr>
                 <td colSpan={10} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                   Nenhuma conta a pagar encontrada.
                 </td>
               </tr>
             ) : (
-              filteredPayables.map((p) => {
+              paginatedPayables.map((p) => {
                 let badgeClass = 'badge-neutral';
                 let statusLabel = 'Pendente';
 
@@ -975,10 +1026,10 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
 
                 return (
                   <tr key={p.id}>
-                    <td style={{ fontWeight: 600, color: p.calculatedStatus === 'overdue' ? '#FB7185' : p.calculatedStatus === 'due_today' ? '#FBBF24' : 'var(--text-primary)' }}>
+                    <td style={{ position: 'sticky', left: 0, zIndex: 10, backgroundColor: '#0F172A', fontWeight: 600, color: p.calculatedStatus === 'overdue' ? '#FB7185' : p.calculatedStatus === 'due_today' ? '#FBBF24' : 'var(--text-primary)' }}>
                       {formatDate(p.due_date)}
                     </td>
-                    <td style={{ fontWeight: 600, color: '#F8FAFC' }}>
+                    <td style={{ position: 'sticky', left: '110px', zIndex: 10, backgroundColor: '#0F172A', fontWeight: 600, color: '#F8FAFC', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>
                       {p.supplier}
                     </td>
                     <td style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -1024,8 +1075,8 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
                     <td style={{ fontSize: '0.8rem', color: p.is_paid ? '#34D399' : 'var(--text-muted)' }}>
                       {p.payment_date ? formatDate(p.payment_date) : '-'}
                     </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <td style={{ position: 'sticky', right: 0, zIndex: 10, backgroundColor: '#0F172A', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)', textAlign: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
                         {!p.is_paid ? (
                           <button
                             type="button"
@@ -1077,6 +1128,19 @@ export const PayablesView: React.FC<PayablesViewProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination Controls */}
+      <PaginationControls
+        currentPage={safePayablesPage}
+        totalItems={totalPayablesCount}
+        itemsPerPage={payablesPerPage}
+        onPageChange={setPayablesCurrentPage}
+        onItemsPerPageChange={setPayablesPerPage}
+        pageSizeOptions={[10, 15, 25, 50, 100]}
+        labelSingular="conta a pagar"
+        labelPlural="contas a pagar"
+        themeColor="#F43F5E"
+      />
 
       {/* 1. EDIT PAYABLE MODAL */}
       {editingPayable && (

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Users, 
   Clock, 
@@ -9,10 +9,10 @@ import {
   AlertCircle, 
   Trash2, 
   Check, 
-  UserPlus,
-  CreditCard,
-  X,
-  Edit3
+  UserPlus, 
+  CreditCard, 
+  X, 
+  Edit3 
 } from 'lucide-react';
 import { Freelancer, FreelancerShift, SystemSettings, DateRange } from '../../types';
 import { formatCurrency, formatDate, formatHours } from '../../lib/formatters';
@@ -20,6 +20,8 @@ import { isDateInRange } from '../../lib/dateUtils';
 import { calculateShiftHours } from '../../lib/calculations';
 import { supabase } from '../../lib/supabase';
 import { DateRangePicker } from '../common/DateRangePicker';
+import { PaginationControls } from '../common/PaginationControls';
+import { useSyncedHorizontalScroll, TableTopScroll } from '../common/TableScrollSync';
 
 interface FreelancersViewProps {
   freelancers: Freelancer[];
@@ -165,6 +167,32 @@ export const FreelancersView: React.FC<FreelancersViewProps> = ({
     const balance = total - paid;
     return { hours, total, paid, balance };
   }, [filteredShifts]);
+
+  // Shifts Table Pagination
+  const [shiftsCurrentPage, setShiftsCurrentPage] = useState<number>(1);
+  const [shiftsPerPage, setShiftsPerPage] = useState<number>(15);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setShiftsCurrentPage(1);
+  }, [dateRange, selectedMonth, selectedYear, selectedFreelancerId]);
+
+  const totalShiftsCount = filteredShifts.length;
+  const shiftsTotalPages = Math.max(1, Math.ceil(totalShiftsCount / shiftsPerPage));
+  const safeShiftsPage = Math.min(shiftsCurrentPage, shiftsTotalPages);
+
+  const paginatedShifts = useMemo(() => {
+    const start = (safeShiftsPage - 1) * shiftsPerPage;
+    return filteredShifts.slice(start, start + shiftsPerPage);
+  }, [filteredShifts, safeShiftsPage, shiftsPerPage]);
+
+  const {
+    topScrollRef,
+    tableContainerRef,
+    scrollWidth,
+    handleTopScroll,
+    handleTableScroll
+  } = useSyncedHorizontalScroll(paginatedShifts);
 
   const handleCreateFreelancer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -533,39 +561,62 @@ export const FreelancersView: React.FC<FreelancersViewProps> = ({
         </div>
       </div>
 
-      {/* Shifts Table */}
-      <div className="table-container">
-        <table className="data-table">
+      {/* Shifts Table with Synchronized Scroll and Sticky Columns */}
+      <TableTopScroll
+        topScrollRef={topScrollRef}
+        onScroll={handleTopScroll}
+        scrollWidth={scrollWidth}
+        currentPage={safeShiftsPage}
+        totalPages={shiftsTotalPages}
+        totalItems={totalShiftsCount}
+        label="turnos"
+      />
+
+      <div 
+        ref={tableContainerRef}
+        onScroll={handleTableScroll}
+        className="table-container"
+        style={{
+          overflowX: 'auto',
+          overflowY: 'auto',
+          maxHeight: '620px',
+          marginTop: 0,
+          borderTopLeftRadius: 0,
+          borderTopRightRadius: 0,
+          border: '1px solid rgba(255, 255, 255, 0.08)'
+        }}
+      >
+        <table className="data-table" style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
           <thead>
             <tr>
-              <th>Data</th>
-              <th>Freelancer</th>
-              <th>Entrada</th>
-              <th>Saída</th>
-              <th>Intervalo</th>
-              <th>Horas</th>
-              <th>Valor/Hora</th>
-              <th>Total Turno</th>
-              <th>Pago</th>
-              <th>Pendente</th>
-              <th>Status</th>
-              <th style={{ textAlign: 'center' }}>Ações</th>
+              <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '110px' }}>Data</th>
+              <th style={{ position: 'sticky', top: 0, left: '110px', zIndex: 25, backgroundColor: '#0F172A', minWidth: '160px', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>Freelancer</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '95px' }}>Entrada</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '95px' }}>Saída</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '95px' }}>Intervalo</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '95px' }}>Horas</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '100px' }}>Valor/Hora</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '115px' }}>Total Turno</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '100px' }}>Pago</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '100px' }}>Pendente</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 15, backgroundColor: '#1E293B', minWidth: '100px' }}>Status</th>
+              <th style={{ position: 'sticky', top: 0, right: 0, zIndex: 25, backgroundColor: '#0F172A', minWidth: '140px', textAlign: 'center', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)' }}>Ações</th>
             </tr>
           </thead>
           <tbody>
-            {filteredShifts.length === 0 ? (
+            {paginatedShifts.length === 0 ? (
               <tr>
                 <td colSpan={12} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                   Nenhum turno registrado para este período.
                 </td>
               </tr>
             ) : (
-              filteredShifts.map((s) => {
+              paginatedShifts.map((s) => {
                 const freelancer = freelancers.find((f) => f.id === s.freelancer_id);
                 return (
                   <tr key={s.id}>
-                    <td style={{ fontWeight: 600 }}>{formatDate(s.shift_date)}</td>
-                    <td style={{ fontWeight: 600, color: '#F8FAFC' }}>{freelancer?.name || 'N/A'}</td>
+                    <td style={{ position: 'sticky', left: 0, zIndex: 10, backgroundColor: '#0F172A', fontWeight: 600 }}>{formatDate(s.shift_date)}</td>
+                    <td style={{ position: 'sticky', left: '110px', zIndex: 10, backgroundColor: '#0F172A', fontWeight: 600, color: '#F8FAFC', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.4)' }}>{freelancer?.name || 'N/A'}</td>
                     <td>{s.start_time}</td>
                     <td>{s.end_time}</td>
                     <td>{s.break_minutes ? `${s.break_minutes} min` : '-'}</td>
@@ -584,7 +635,7 @@ export const FreelancersView: React.FC<FreelancersViewProps> = ({
                         {s.payment_status === 'paid' ? 'Pago' : s.payment_status === 'partially_paid' ? 'Parcial' : 'Pendente'}
                       </span>
                     </td>
-                    <td>
+                    <td style={{ position: 'sticky', right: 0, zIndex: 10, backgroundColor: '#0F172A', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.4)', textAlign: 'center' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
                         {s.balance_due > 0 && (
                           <button
@@ -625,6 +676,19 @@ export const FreelancersView: React.FC<FreelancersViewProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination Controls */}
+      <PaginationControls
+        currentPage={safeShiftsPage}
+        totalItems={totalShiftsCount}
+        itemsPerPage={shiftsPerPage}
+        onPageChange={setShiftsCurrentPage}
+        onItemsPerPageChange={setShiftsPerPage}
+        pageSizeOptions={[10, 15, 25, 50, 100]}
+        labelSingular="turno"
+        labelPlural="turnos"
+        themeColor="#F43F5E"
+      />
 
       {/* New Freelancer Modal */}
       {showFreelancerModal && (
