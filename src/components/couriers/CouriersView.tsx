@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Bike, 
   DollarSign, 
@@ -18,6 +18,9 @@ import {
   Clock,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  Package,
   Table,
   LayoutGrid
 } from 'lucide-react';
@@ -93,6 +96,39 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
   const [deletingDelivery, setDeletingDelivery] = useState<Delivery | null>(null);
   const [isDeletingDelivery, setIsDeletingDelivery] = useState<boolean>(false);
   const [reconciliationModalType, setReconciliationModalType] = useState<ReconciliationModalType | null>(null);
+  const [isSavingDelivery, setIsSavingDelivery] = useState<boolean>(false);
+
+  // Deliveries Table Pagination State
+  const [deliveriesCurrentPage, setDeliveriesCurrentPage] = useState<number>(1);
+  const [deliveriesPerPage, setDeliveriesPerPage] = useState<number>(15);
+
+  // Deliveries Table Dual Horizontal Scroll Sync
+  const topScrollRef = useRef<HTMLDivElement>(null);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const [tableScrollWidth, setTableScrollWidth] = useState<number>(1500);
+  const isSyncingScrollRef = useRef<boolean>(false);
+
+  const handleTopScroll = () => {
+    if (isSyncingScrollRef.current) return;
+    isSyncingScrollRef.current = true;
+    if (tableContainerRef.current && topScrollRef.current) {
+      tableContainerRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+    }
+    requestAnimationFrame(() => {
+      isSyncingScrollRef.current = false;
+    });
+  };
+
+  const handleTableScroll = () => {
+    if (isSyncingScrollRef.current) return;
+    isSyncingScrollRef.current = true;
+    if (topScrollRef.current && tableContainerRef.current) {
+      topScrollRef.current.scrollLeft = tableContainerRef.current.scrollLeft;
+    }
+    requestAnimationFrame(() => {
+      isSyncingScrollRef.current = false;
+    });
+  };
 
   // Toggle courier visibility in the mobile portal login
   const [updatingCourierId, setUpdatingCourierId] = useState<string | null>(null);
@@ -364,6 +400,26 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       return true;
     });
   }, [deliveries, dateRange, selectedMonth, selectedYear, selectedCourierName]);
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setDeliveriesCurrentPage(1);
+  }, [dateRange, selectedCourierName, selectedMonth, selectedYear]);
+
+  const totalDeliveriesCount = filteredDeliveries.length;
+  const deliveriesTotalPages = Math.max(1, Math.ceil(totalDeliveriesCount / deliveriesPerPage));
+  const safeDeliveriesPage = Math.min(deliveriesCurrentPage, deliveriesTotalPages);
+
+  const paginatedDeliveries = useMemo(() => {
+    const start = (safeDeliveriesPage - 1) * deliveriesPerPage;
+    return filteredDeliveries.slice(start, start + deliveriesPerPage);
+  }, [filteredDeliveries, safeDeliveriesPage, deliveriesPerPage]);
+
+  useEffect(() => {
+    if (tableContainerRef.current) {
+      setTableScrollWidth(tableContainerRef.current.scrollWidth);
+    }
+  }, [paginatedDeliveries]);
 
   // Group deliveries by Operational Date (YYYY-MM-DD) and Courier for daily settlement / payment control
   const dailySettlements = useMemo(() => {
@@ -734,8 +790,9 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
 
   const handleUpdateDelivery = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingDelivery) return;
+    if (!editingDelivery || isSavingDelivery) return;
 
+    setIsSavingDelivery(true);
     try {
       const baseRate = Number(settings.courier_base_rate || 8.00);
       const totalRate = Number(editDeliveryRate);
@@ -743,13 +800,54 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
       const neighborhoodName = (editingDelivery.neighborhood_name || '').trim();
       const normNeighborhood = normalizeNeighborhoodName(neighborhoodName);
 
+      // Find courier object to associate courier_id accurately
+      const courierObj = couriers.find(
+        (c) => c.name.trim().toLowerCase() === (editingDelivery.courier_name || '').trim().toLowerCase()
+      );
+      const courierIdToSet = courierObj ? courierObj.id : null;
+
       // 1. Find if neighborhood exists in catalog
       let matchedRate = neighborhoodRates.find(
         (r) => normalizeNeighborhoodName(r.name) === normNeighborhood || 
                r.name.toLowerCase() === neighborhoodName.toLowerCase()
       );
 
-      // 2. If updateOfficialRate is enabled, update or insert into neighborhood_rates
+      // 2. UPDATE THIS DELIVERY IMMEDIATELY (Priority 1)
+      const { error: deliveryError } = await supabase
+        .from('deliveries')
+        .update({
+          courier_id: courierIdToSet,
+          courier_name: editingDelivery.courier_name,
+          neighborhood_name: neighborhoodName,
+          neighborhood_rate_id: matchedRate ? matchedRate.id : editingDelivery.neighborhood_rate_id,
+          neighborhood_total_rate: totalRate,
+          base_rate: rates.baseRate,
+          additional_rate: rates.additionalRate,
+          courier_fee: rates.courierFee,
+          is_manually_edited: true,
+          notes: editingDelivery.notes,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', editingDelivery.id);
+
+      if (deliveryError) throw deliveryError;
+
+      // 3. UPDATE MATCHING ORDER IMMEDIATELY (Priority 2)
+      if (editingDelivery.external_order_id) {
+        await supabase
+          .from('orders')
+          .update({
+            delivery_fee: totalRate,
+            courier_id: courierIdToSet,
+            courier_name: editingDelivery.courier_name,
+            neighborhood_name: neighborhoodName,
+            neighborhood_id: matchedRate ? matchedRate.id : undefined,
+            updated_at: new Date().toISOString()
+          })
+          .eq('external_order_id', editingDelivery.external_order_id);
+      }
+
+      // 4. If updateOfficialRate is enabled, update or insert into neighborhood_rates
       if (updateOfficialRate && neighborhoodName) {
         if (matchedRate) {
           const { error: updateErr } = await supabase
@@ -758,7 +856,8 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
               total_rate: totalRate,
               base_rate: baseRate,
               additional_rate: rates.additionalRate,
-              is_active: true
+              is_active: true,
+              updated_at: new Date().toISOString()
             })
             .eq('id', matchedRate.id);
 
@@ -784,43 +883,24 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
             matchedRate = newRate;
           }
         }
+
+        // Run neighborhood rate sync to other past orders in background (non-blocking)
         if (matchedRate) {
-          await syncNeighborhoodRateToOrders(matchedRate, undefined, settings);
+          syncNeighborhoodRateToOrders(matchedRate, undefined, settings).catch((syncErr) =>
+            console.error('Erro na sincronização de bairros em segundo plano:', syncErr)
+          );
         }
       }
 
-      // 3. Update deliveries table
-      const { error: deliveryError } = await supabase
-        .from('deliveries')
-        .update({
-          courier_name: editingDelivery.courier_name,
-          neighborhood_name: neighborhoodName,
-          neighborhood_rate_id: matchedRate ? matchedRate.id : editingDelivery.neighborhood_rate_id,
-          neighborhood_total_rate: totalRate,
-          base_rate: rates.baseRate,
-          additional_rate: rates.additionalRate,
-          courier_fee: rates.courierFee,
-          is_manually_edited: true,
-          notes: editingDelivery.notes
-        })
-        .eq('id', editingDelivery.id);
-
-      if (deliveryError) throw deliveryError;
-
-      // 4. Update matching order delivery_fee in orders table
-      if (editingDelivery.external_order_id) {
-        await supabase
-          .from('orders')
-          .update({
-            delivery_fee: totalRate
-          })
-          .eq('external_order_id', editingDelivery.external_order_id);
+      // 5. Await system refresh and close modal
+      if (onRefresh) {
+        await onRefresh();
       }
-
       setEditingDelivery(null);
-      onRefresh();
     } catch (err: any) {
       alert('Erro ao atualizar entrega: ' + err.message);
+    } finally {
+      setIsSavingDelivery(false);
     }
   };
 
@@ -2076,47 +2156,171 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
         )}
       </div>
 
-      {/* Deliveries Table */}
-      <div className="table-container">
-        <table className="data-table">
+      {/* Deliveries Table Header & Controls */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '12px',
+        marginBottom: '10px',
+        padding: '10px 14px',
+        backgroundColor: '#1E293B',
+        borderRadius: '12px',
+        border: '1px solid rgba(255, 255, 255, 0.08)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <Package size={18} color="#F43F5E" />
+          <h4 style={{ margin: 0, fontWeight: 700, fontSize: '0.98rem', color: '#F8FAFC' }}>
+            Listagem de Corridas do Período ({totalDeliveriesCount})
+          </h4>
+          <span style={{ fontSize: '0.78rem', color: '#94A3B8', marginLeft: '6px' }}>
+            Pág. {safeDeliveriesPage} de {deliveriesTotalPages}
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          {/* Quick Page Jump Buttons on Top */}
+          {deliveriesTotalPages > 1 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <button
+                type="button"
+                onClick={() => setDeliveriesCurrentPage(p => Math.max(1, p - 1))}
+                disabled={safeDeliveriesPage <= 1}
+                className="btn btn-secondary btn-sm"
+                style={{ padding: '3px 8px', fontSize: '0.75rem', opacity: safeDeliveriesPage <= 1 ? 0.5 : 1 }}
+                title="Página Anterior"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <span style={{ fontSize: '0.78rem', color: '#CBD5E1', padding: '0 4px' }}>
+                {safeDeliveriesPage} / {deliveriesTotalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setDeliveriesCurrentPage(p => Math.min(deliveriesTotalPages, p + 1))}
+                disabled={safeDeliveriesPage >= deliveriesTotalPages}
+                className="btn btn-secondary btn-sm"
+                style={{ padding: '3px 8px', fontSize: '0.75rem', opacity: safeDeliveriesPage >= deliveriesTotalPages ? 0.5 : 1 }}
+                title="Próxima Página"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          )}
+
+          {/* Items per page selector */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: '#94A3B8' }}>
+            <span>Itens por pág:</span>
+            <select
+              value={deliveriesPerPage}
+              onChange={(e) => {
+                setDeliveriesPerPage(Number(e.target.value));
+                setDeliveriesCurrentPage(1);
+              }}
+              className="select"
+              style={{ padding: '3px 8px', fontSize: '0.78rem', width: 'auto', minWidth: '75px', height: '28px' }}
+            >
+              <option value={10}>10</option>
+              <option value={15}>15</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Top Synced Horizontal Scrollbar (Permite rolar lateralmente pelo topo sem descer a página) */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '5px 12px',
+        backgroundColor: '#0F172A',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
+        borderBottom: 'none',
+        borderRadius: '10px 10px 0 0',
+        fontSize: '0.72rem',
+        color: '#94A3B8'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{ color: '#38BDF8', fontWeight: 700 }}>↔ Rolagem Lateral Rápida:</span>
+          <span>Arraste a barra abaixo pelo topo ou pela tabela para ver colunas da direita</span>
+        </div>
+        <span style={{ color: '#64748B' }}>Dica: Shift + Scroll do mouse rola de lado</span>
+      </div>
+      <div
+        ref={topScrollRef}
+        onScroll={handleTopScroll}
+        style={{
+          width: '100%',
+          overflowX: 'auto',
+          overflowY: 'hidden',
+          backgroundColor: '#090D16',
+          borderLeft: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRight: '1px solid rgba(255, 255, 255, 0.08)',
+          height: '14px',
+          cursor: 'ew-resize'
+        }}
+        title="Role lateralmente por aqui sem descer a página"
+      >
+        <div style={{ width: `${Math.max(1450, tableScrollWidth)}px`, height: '1px' }} />
+      </div>
+
+      {/* Deliveries Table Container */}
+      <div 
+        ref={tableContainerRef}
+        onScroll={handleTableScroll}
+        className="table-container"
+        style={{
+          borderTopLeftRadius: 0,
+          borderTopRightRadius: 0,
+          maxHeight: '600px',
+          overflowY: 'auto',
+          overflowX: 'auto',
+          position: 'relative'
+        }}
+      >
+        <table className="data-table" style={{ width: '100%', minWidth: '1450px' }}>
           <thead>
             <tr>
-              <th>Data</th>
-              <th>Nº Pedido</th>
-              <th>Id Ext.</th>
-              <th>Cliente</th>
-              <th>Entregador</th>
-              <th>Bairro</th>
-              <th>Tarifa Bairro</th>
-              <th>Base</th>
-              <th>Adicional</th>
-              <th>Total Entrega</th>
-              <th>Valor Pedido</th>
-              <th>Pagamento</th>
-              <th>Status</th>
-              <th>Pgto Motoboy</th>
-              <th>Ações</th>
+              <th style={{ position: 'sticky', left: 0, top: 0, zIndex: 30, backgroundColor: '#0E1524', minWidth: '125px', width: '125px' }}>Data</th>
+              <th style={{ position: 'sticky', left: '125px', top: 0, zIndex: 30, backgroundColor: '#0E1524', minWidth: '95px', width: '95px', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.35)' }}>Nº Pedido</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Id Ext.</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Cliente</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Entregador</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Bairro</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Tarifa Bairro</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Base</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Adicional</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Total Entrega</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Valor Pedido</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Pagamento</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Status</th>
+              <th style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#0E1524' }}>Pgto Motoboy</th>
+              <th style={{ position: 'sticky', right: 0, top: 0, zIndex: 30, backgroundColor: '#0E1524', minWidth: '85px', width: '85px', textAlign: 'center', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.35)' }}>Ações</th>
             </tr>
           </thead>
           <tbody>
-            {filteredDeliveries.length === 0 ? (
+            {paginatedDeliveries.length === 0 ? (
               <tr>
                 <td colSpan={15} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
                   Nenhuma entrega registrada para este período.
                 </td>
               </tr>
             ) : (
-              filteredDeliveries.map((d) => {
+              paginatedDeliveries.map((d) => {
                 const order = ordersMap.get(d.external_order_id);
                 const payMethod = order ? (order.final_payment_method || order.original_payment_method) : d.payment_method;
                 const isReturn = d.is_return || (d.order_number && String(d.order_number).startsWith('RET')) || (d.notes && d.notes.toLowerCase().includes('retorno'));
 
                 return (
-                  <tr key={d.id}>
-                    <td style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  <tr key={d.id} style={{ backgroundColor: '#0F172A' }}>
+                    <td style={{ position: 'sticky', left: 0, zIndex: 10, backgroundColor: '#0F172A', fontSize: '0.78rem', color: 'var(--text-secondary)', minWidth: '125px', width: '125px' }}>
                       {formatDateTime(d.delivery_date)}
                     </td>
-                    <td>
+                    <td style={{ position: 'sticky', left: '125px', zIndex: 10, backgroundColor: '#0F172A', minWidth: '95px', width: '95px', boxShadow: '4px 0 8px rgba(0, 0, 0, 0.35)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span style={{ fontWeight: 700, color: '#F8FAFC' }}>
                           #{d.order_number || '-'}
@@ -2211,8 +2415,8 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
                         {d.is_paid ? '✅ Pago' : '⏳ Pendente'}
                       </span>
                     </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <td style={{ position: 'sticky', right: 0, zIndex: 10, backgroundColor: '#0F172A', minWidth: '85px', width: '85px', textAlign: 'center', boxShadow: '-4px 0 8px rgba(0, 0, 0, 0.35)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
                         <button
                           onClick={() => handleOpenEditModal(d)}
                           className="btn btn-secondary btn-sm"
@@ -2237,6 +2441,115 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Deliveries Table Bottom Pagination Controls */}
+      {totalDeliveriesCount > deliveriesPerPage && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px',
+          marginTop: '12px',
+          padding: '12px 16px',
+          backgroundColor: '#1E293B',
+          borderRadius: '12px',
+          border: '1px solid rgba(255, 255, 255, 0.08)'
+        }}>
+          <div style={{ fontSize: '0.82rem', color: '#94A3B8' }}>
+            Mostrando <strong style={{ color: '#F8FAFC' }}>{(safeDeliveriesPage - 1) * deliveriesPerPage + 1}–{Math.min(safeDeliveriesPage * deliveriesPerPage, totalDeliveriesCount)}</strong> de <strong style={{ color: '#F8FAFC' }}>{totalDeliveriesCount}</strong> corridas
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => setDeliveriesCurrentPage(1)}
+              disabled={safeDeliveriesPage <= 1}
+              className="btn btn-secondary btn-sm"
+              style={{ padding: '6px 10px', fontSize: '0.78rem', opacity: safeDeliveriesPage <= 1 ? 0.4 : 1 }}
+              title="Primeira página"
+            >
+              « Primeira
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeliveriesCurrentPage(p => Math.max(1, p - 1))}
+              disabled={safeDeliveriesPage <= 1}
+              className="btn btn-secondary btn-sm"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '6px 10px', fontSize: '0.78rem', opacity: safeDeliveriesPage <= 1 ? 0.4 : 1 }}
+            >
+              <ChevronLeft size={14} />
+              <span>Anterior</span>
+            </button>
+
+            {/* Page number buttons */}
+            {(() => {
+              const pages: (number | string)[] = [];
+              if (deliveriesTotalPages <= 7) {
+                for (let i = 1; i <= deliveriesTotalPages; i++) pages.push(i);
+              } else {
+                if (safeDeliveriesPage <= 3) {
+                  pages.push(1, 2, 3, 4, '...', deliveriesTotalPages);
+                } else if (safeDeliveriesPage >= deliveriesTotalPages - 2) {
+                  pages.push(1, '...', deliveriesTotalPages - 3, deliveriesTotalPages - 2, deliveriesTotalPages - 1, deliveriesTotalPages);
+                } else {
+                  pages.push(1, '...', safeDeliveriesPage - 1, safeDeliveriesPage, safeDeliveriesPage + 1, '...', deliveriesTotalPages);
+                }
+              }
+              return pages.map((page, idx) => {
+                if (page === '...') {
+                  return <span key={`dots-${idx}`} style={{ padding: '0 4px', color: '#64748B' }}>...</span>;
+                }
+                const pageNum = Number(page);
+                const isActive = pageNum === safeDeliveriesPage;
+                return (
+                  <button
+                    key={`p-${pageNum}-${idx}`}
+                    type="button"
+                    onClick={() => setDeliveriesCurrentPage(pageNum)}
+                    style={{
+                      minWidth: '32px',
+                      height: '32px',
+                      padding: '0 6px',
+                      borderRadius: '8px',
+                      backgroundColor: isActive ? '#F43F5E' : 'rgba(255, 255, 255, 0.05)',
+                      border: isActive ? '1px solid #F43F5E' : '1px solid rgba(255, 255, 255, 0.1)',
+                      color: isActive ? '#FFFFFF' : '#CBD5E1',
+                      fontSize: '0.8rem',
+                      fontWeight: isActive ? 700 : 500,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              });
+            })()}
+
+            <button
+              type="button"
+              onClick={() => setDeliveriesCurrentPage(p => Math.min(deliveriesTotalPages, p + 1))}
+              disabled={safeDeliveriesPage >= deliveriesTotalPages}
+              className="btn btn-secondary btn-sm"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '6px 10px', fontSize: '0.78rem', opacity: safeDeliveriesPage >= deliveriesTotalPages ? 0.4 : 1 }}
+            >
+              <span>Próxima</span>
+              <ChevronRight size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeliveriesCurrentPage(deliveriesTotalPages)}
+              disabled={safeDeliveriesPage >= deliveriesTotalPages}
+              className="btn btn-secondary btn-sm"
+              style={{ padding: '6px 10px', fontSize: '0.78rem', opacity: safeDeliveriesPage >= deliveriesTotalPages ? 0.4 : 1 }}
+              title="Última página"
+            >
+              Última »
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Add Courier Modal */}
       {showAddModal && (
@@ -2441,11 +2754,28 @@ export const CouriersView: React.FC<CouriersViewProps> = ({
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-                <button type="button" onClick={() => setEditingDelivery(null)} className="btn btn-secondary">
+                <button 
+                  type="button" 
+                  onClick={() => setEditingDelivery(null)} 
+                  className="btn btn-secondary"
+                  disabled={isSavingDelivery}
+                >
                   Cancelar
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  Salvar Alterações
+                <button 
+                  type="submit" 
+                  className="btn btn-primary"
+                  disabled={isSavingDelivery}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                >
+                  {isSavingDelivery ? (
+                    <>
+                      <Clock size={16} className="animate-spin" />
+                      <span>Salvando...</span>
+                    </>
+                  ) : (
+                    <span>Salvar Alterações</span>
+                  )}
                 </button>
               </div>
             </form>
